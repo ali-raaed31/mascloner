@@ -214,18 +214,31 @@ setup_python_environment() {
 generate_encryption_key() {
     echo_info "Generating encryption key..."
     
-    # Generate Fernet key using Python
-    FERNET_KEY=$(sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/python" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    # Generate Fernet key using Python (output only the key, no other messages)
+    local fernet_key
+    fernet_key=$(sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/python" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null)
+    
+    if [[ -z "$fernet_key" ]]; then
+        echo_error "Failed to generate encryption key"
+        return 1
+    fi
     
     echo_success "Encryption key generated"
-    echo "$FERNET_KEY"
+    echo "$fernet_key"
 }
 
 create_environment_file() {
     echo_info "Creating environment configuration..."
     
     local fernet_key
-    fernet_key=$(generate_encryption_key)
+    fernet_key=$(generate_encryption_key | tail -1)  # Get only the last line (the key)
+    
+    # Validate the key format (should be base64, 44 characters ending with =)
+    if [[ ! "$fernet_key" =~ ^[A-Za-z0-9_-]{43}=$ ]]; then
+        echo_error "Invalid Fernet key format: $fernet_key"
+        echo_error "Key should be 44 characters of base64 ending with ="
+        return 1
+    fi
     
     cat > "$INSTALL_DIR/.env" << EOF
 # MasCloner Production Configuration
@@ -276,8 +289,25 @@ EOF
     if [[ -f "$INSTALL_DIR/.env" ]]; then
         echo_info "Environment file created at: $INSTALL_DIR/.env"
         echo_info "File size: $(wc -c < "$INSTALL_DIR/.env") bytes"
-        echo_info "Sample content check:"
-        head -3 "$INSTALL_DIR/.env" | grep -E "^(MASCLONER_BASE_DIR|MASCLONER_FERNET_KEY)" || echo_warning "Key variables not found in .env file"
+        
+        # Verify critical variables are set correctly
+        local env_base_dir env_fernet_key
+        env_base_dir=$(grep "^MASCLONER_BASE_DIR=" "$INSTALL_DIR/.env" | cut -d'=' -f2)
+        env_fernet_key=$(grep "^MASCLONER_FERNET_KEY=" "$INSTALL_DIR/.env" | cut -d'=' -f2)
+        
+        if [[ "$env_base_dir" == "$INSTALL_DIR" ]]; then
+            echo_info "✅ Base directory correctly set: $env_base_dir"
+        else
+            echo_error "❌ Base directory incorrect: expected $INSTALL_DIR, got $env_base_dir"
+            return 1
+        fi
+        
+        if [[ "$env_fernet_key" =~ ^[A-Za-z0-9_-]{43}=$ ]]; then
+            echo_info "✅ Fernet key format is valid (${#env_fernet_key} chars)"
+        else
+            echo_error "❌ Fernet key format invalid: $env_fernet_key"
+            return 1
+        fi
     else
         echo_error "Failed to create environment file"
         exit 1

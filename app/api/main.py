@@ -174,8 +174,9 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
             )
         
         # Prepare rclone config command
-        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
-        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        mascloner_user = "mascloner"  # Fixed user for production
         
         # Remove existing gdrive remote if it exists
         try:
@@ -236,8 +237,9 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
 async def get_google_drive_status():
     """Get Google Drive configuration status."""
     try:
-        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
-        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        mascloner_user = "mascloner"  # Fixed user for production
         
         # Check if gdrive remote exists
         result = subprocess.run([
@@ -290,8 +292,9 @@ async def get_google_drive_status():
 async def test_google_drive_connection():
     """Test Google Drive connection."""
     try:
-        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
-        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        mascloner_user = "mascloner"  # Fixed user for production
         
         # Test connection with optimized settings
         result = subprocess.run([
@@ -339,8 +342,9 @@ async def test_google_drive_connection():
 async def remove_google_drive_config():
     """Remove Google Drive configuration."""
     try:
-        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
-        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        mascloner_user = "mascloner"  # Fixed user for production
         
         result = subprocess.run([
             "sudo", "-u", mascloner_user,
