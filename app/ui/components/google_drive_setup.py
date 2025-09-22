@@ -50,7 +50,7 @@ class GoogleDriveSetup:
             **On ANY computer with a web browser**, run this command:
             
             ```bash
-            rclone authorize "drive" "scope=drive.readonly"
+            rclone authorize "drive"
             ```
             
             **What happens:**
@@ -74,9 +74,10 @@ class GoogleDriveSetup:
             
             if scope == "drive":
                 st.info("💡 **Tip:** Use read-only unless you specifically need write access")
-                st.code(f'rclone authorize "drive" "scope=drive"')
-            else:
-                st.code(f'rclone authorize "drive" "scope=drive.readonly"')
+            
+            st.code('rclone authorize "drive"')
+            
+            st.info("ℹ️ **Note:** The scope will be configured automatically when you paste the token below.")
         
         # Step 2: Token input
         with st.expander("🔑 Step 2: Paste Your Token", expanded=True):
