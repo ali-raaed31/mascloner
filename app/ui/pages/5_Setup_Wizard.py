@@ -524,15 +524,19 @@ Checkers: {setup_data.get('checkers', 8)}
         with st.spinner("Saving configuration..."):
             # Save sync configuration
             sync_config = {
-                "gdrive_remote": setup_data.get("gdrive_remote"),
+                "gdrive_remote": setup_data.get("gdrive_remote", "gdrive"),
                 "gdrive_src": setup_data.get("gdrive_src", ""),
-                "nc_remote": setup_data.get("nc_remote"),
-                "nc_dest_path": setup_data.get("nc_dest_path")
+                "nc_remote": setup_data.get("nc_remote", "ncwebdav"),
+                "nc_dest_path": setup_data.get("nc_dest_path", "")
             }
+            
+            # Debug: Show what we're trying to save
+            st.write("**Debug - Configuration to save:**")
+            st.json(sync_config)
             
             sync_result = api.update_config(sync_config)
             
-            if sync_result and sync_result.get("status") == "success":
+            if sync_result and sync_result.get("success"):
                 # Save performance configuration
                 perf_config = {
                     "sync_interval_min": setup_data.get("sync_interval_min"),
@@ -543,7 +547,7 @@ Checkers: {setup_data.get('checkers', 8)}
                 
                 perf_result = api.update_config(perf_config)
                 
-                if perf_result and perf_result.get("status") == "success":
+                if perf_result and perf_result.get("success"):
                     # Start scheduler
                     scheduler_result = api.start_scheduler()
                     
