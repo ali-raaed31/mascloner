@@ -68,9 +68,14 @@ class GoogleDriveSetup:
             scope = st.selectbox(
                 "Choose access level:",
                 ["drive.readonly", "drive"],
-                format_func=lambda x: "📖 Read-only (recommended for syncing)" if x == "drive.readonly" else "📝 Full access (read and write)",
-                help="Read-only is safer and sufficient for most sync operations"
+                format_func=lambda x: "📖 Read-only (my files only)" if x == "drive.readonly" else "📝 Full access (includes 'shared with me')",
+                help="Choose 'Full access' if you need to sync files shared with you by others"
             )
+            
+            if scope == "drive.readonly":
+                st.warning("⚠️ **Note:** Read-only access only shows files you own, not files shared with you.")
+            else:
+                st.info("✅ **Full access** includes your files AND files shared with you by others.")
             
             if scope == "drive":
                 st.info("💡 **Tip:** Use read-only unless you specifically need write access")
