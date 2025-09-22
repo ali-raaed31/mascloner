@@ -15,6 +15,9 @@ from .models import Run, FileEvent, ConfigKV
 from .scheduler import start_scheduler, stop_scheduler, get_scheduler, sync_job, cleanup_old_runs
 from .config import config
 from .tree_builder import FileTreeBuilder
+import subprocess
+import json
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +78,23 @@ class ApiResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class GoogleDriveOAuthRequest(BaseModel):
+    """Request model for Google Drive OAuth configuration."""
+    token: str = Field(..., description="OAuth token from rclone authorize")
+    scope: str = Field(default="drive.readonly", description="OAuth scope")
+    client_id: Optional[str] = Field(None, description="Custom client ID (optional)")
+    client_secret: Optional[str] = Field(None, description="Custom client secret (optional)")
+
+
+class GoogleDriveStatusResponse(BaseModel):
+    """Response model for Google Drive status."""
+    configured: bool
+    remote_name: str = "gdrive"
+    scope: Optional[str] = None
+    folders: Optional[List[str]] = None
+    last_test: Optional[str] = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -132,6 +152,219 @@ app.add_middleware(
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "mascloner-api"}
+
+
+# Google Drive OAuth endpoints
+@app.post("/oauth/google-drive", response_model=ApiResponse)
+async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
+    """Configure Google Drive using OAuth token from rclone authorize."""
+    try:
+        # Validate token format
+        try:
+            token_data = json.loads(request.token)
+            if "access_token" not in token_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid token format: missing access_token"
+                )
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid token format: not valid JSON"
+            )
+        
+        # Prepare rclone config command
+        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
+        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        
+        # Remove existing gdrive remote if it exists
+        try:
+            subprocess.run([
+                "sudo", "-u", mascloner_user,
+                "rclone", "--config", rclone_config,
+                "config", "delete", "gdrive"
+            ], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            pass  # Ignore if removal fails
+        
+        # Build config create command
+        cmd = [
+            "sudo", "-u", mascloner_user,
+            "rclone", "--config", rclone_config,
+            "config", "create", "gdrive", "drive",
+            f"scope={request.scope}",
+            f"token={request.token}"
+        ]
+        
+        # Add custom client credentials if provided
+        if request.client_id:
+            cmd.extend([f"client_id={request.client_id}"])
+        if request.client_secret:
+            cmd.extend([f"client_secret={request.client_secret}"])
+        
+        # Execute rclone config create
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0:
+            logger.info("Google Drive OAuth configured successfully")
+            return ApiResponse(
+                success=True,
+                message="Google Drive configured successfully",
+                data={"remote_name": "gdrive", "scope": request.scope}
+            )
+        else:
+            logger.error(f"rclone config failed: {result.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Configuration failed: {result.stderr or 'Unknown error'}"
+            )
+            
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration timeout - rclone took too long to respond"
+        )
+    except Exception as e:
+        logger.error(f"Google Drive OAuth configuration error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Configuration error: {str(e)}"
+        )
+
+
+@app.get("/oauth/google-drive/status", response_model=GoogleDriveStatusResponse)
+async def get_google_drive_status():
+    """Get Google Drive configuration status."""
+    try:
+        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
+        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        
+        # Check if gdrive remote exists
+        result = subprocess.run([
+            "sudo", "-u", mascloner_user,
+            "rclone", "--config", rclone_config,
+            "listremotes"
+        ], capture_output=True, text=True, timeout=10)
+        
+        configured = result.returncode == 0 and "gdrive:" in result.stdout
+        
+        response_data = {
+            "configured": configured,
+            "remote_name": "gdrive"
+        }
+        
+        if configured:
+            # Try to get some folder info
+            try:
+                folder_result = subprocess.run([
+                    "sudo", "-u", mascloner_user,
+                    "rclone", "--config", rclone_config,
+                    "--transfers=2", "--checkers=2",
+                    "lsd", "gdrive:"
+                ], capture_output=True, text=True, timeout=15)
+                
+                if folder_result.returncode == 0:
+                    folders = []
+                    for line in folder_result.stdout.strip().split('\n'):
+                        if line.strip():
+                            # Extract folder name from rclone lsd output
+                            parts = line.strip().split()
+                            if len(parts) >= 5:
+                                folder_name = ' '.join(parts[4:])
+                                folders.append(folder_name)
+                    
+                    response_data["folders"] = folders[:10]  # Limit to 10 folders
+                    response_data["scope"] = "drive.readonly"  # Would need to parse from config
+                    
+            except subprocess.TimeoutExpired:
+                logger.warning("Google Drive folder listing timeout")
+        
+        return GoogleDriveStatusResponse(**response_data)
+        
+    except Exception as e:
+        logger.error(f"Google Drive status check error: {e}")
+        return GoogleDriveStatusResponse(configured=False)
+
+
+@app.post("/oauth/google-drive/test", response_model=ApiResponse)
+async def test_google_drive_connection():
+    """Test Google Drive connection."""
+    try:
+        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
+        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        
+        # Test connection with optimized settings
+        result = subprocess.run([
+            "sudo", "-u", mascloner_user,
+            "rclone", "--config", rclone_config,
+            "--transfers=4", "--checkers=8",
+            "lsd", "gdrive:"
+        ], capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0:
+            # Parse folder list
+            folders = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        folder_name = ' '.join(parts[4:])
+                        folders.append(folder_name)
+            
+            return ApiResponse(
+                success=True,
+                message="Google Drive connection successful",
+                data={"folders": folders[:10]}
+            )
+        else:
+            return ApiResponse(
+                success=False,
+                message=f"Connection failed: {result.stderr or 'Unknown error'}"
+            )
+            
+    except subprocess.TimeoutExpired:
+        return ApiResponse(
+            success=False,
+            message="Connection test timeout"
+        )
+    except Exception as e:
+        logger.error(f"Google Drive connection test error: {e}")
+        return ApiResponse(
+            success=False,
+            message=f"Test error: {str(e)}"
+        )
+
+
+@app.delete("/oauth/google-drive", response_model=ApiResponse)
+async def remove_google_drive_config():
+    """Remove Google Drive configuration."""
+    try:
+        rclone_config = config.get("RCLONE_CONFIG_PATH", "/srv/mascloner/etc/rclone.conf")
+        mascloner_user = config.get("MASCLONER_USER", "mascloner")
+        
+        result = subprocess.run([
+            "sudo", "-u", mascloner_user,
+            "rclone", "--config", rclone_config,
+            "config", "delete", "gdrive"
+        ], capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            return ApiResponse(
+                success=True,
+                message="Google Drive configuration removed successfully"
+            )
+        else:
+            return ApiResponse(
+                success=False,
+                message=f"Failed to remove configuration: {result.stderr or 'Unknown error'}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Google Drive config removal error: {e}")
+        return ApiResponse(
+            success=False,
+            message=f"Removal error: {str(e)}"
+        )
 
 
 # Status endpoint

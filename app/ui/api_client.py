@@ -118,3 +118,30 @@ class APIClient:
     def get_database_info(self) -> Optional[Dict[str, Any]]:
         """Get database information."""
         return self._make_request("GET", "/database/info")
+    
+    # Google Drive OAuth methods
+    def configure_google_drive_oauth(self, token: str, scope: str = "drive.readonly", 
+                                   client_id: str = None, client_secret: str = None) -> Optional[Dict[str, Any]]:
+        """Configure Google Drive using OAuth token."""
+        data = {
+            "token": token,
+            "scope": scope
+        }
+        if client_id:
+            data["client_id"] = client_id
+        if client_secret:
+            data["client_secret"] = client_secret
+        
+        return self._make_request("POST", "/oauth/google-drive", json=data)
+    
+    def get_google_drive_status(self) -> Optional[Dict[str, Any]]:
+        """Get Google Drive configuration status."""
+        return self._make_request("GET", "/oauth/google-drive/status")
+    
+    def test_google_drive_connection(self) -> Optional[Dict[str, Any]]:
+        """Test Google Drive connection."""
+        return self._make_request("POST", "/oauth/google-drive/test")
+    
+    def remove_google_drive_config(self) -> Optional[Dict[str, Any]]:
+        """Remove Google Drive configuration."""
+        return self._make_request("DELETE", "/oauth/google-drive")
