@@ -181,7 +181,6 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
         # Remove existing gdrive remote if it exists
         try:
             subprocess.run([
-                "sudo", "-u", mascloner_user,
                 "rclone", "--config", rclone_config,
                 "config", "delete", "gdrive"
             ], capture_output=True, timeout=10)
@@ -190,7 +189,6 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
         
         # Build config create command
         cmd = [
-            "sudo", "-u", mascloner_user,
             "rclone", "--config", rclone_config,
             "config", "create", "gdrive", "drive",
             f"scope={request.scope}",
@@ -243,7 +241,6 @@ async def get_google_drive_status():
         
         # Check if gdrive remote exists
         result = subprocess.run([
-            "sudo", "-u", mascloner_user,
             "rclone", "--config", rclone_config,
             "listremotes"
         ], capture_output=True, text=True, timeout=10)
@@ -259,7 +256,6 @@ async def get_google_drive_status():
             # Try to get some folder info
             try:
                 folder_result = subprocess.run([
-                    "sudo", "-u", mascloner_user,
                     "rclone", "--config", rclone_config,
                     "--transfers=2", "--checkers=2",
                     "lsd", "gdrive:"
@@ -298,7 +294,6 @@ async def test_google_drive_connection():
         
         # Test connection with optimized settings
         result = subprocess.run([
-            "sudo", "-u", mascloner_user,
             "rclone", "--config", rclone_config,
             "--transfers=4", "--checkers=8",
             "lsd", "gdrive:"
@@ -347,7 +342,6 @@ async def remove_google_drive_config():
         mascloner_user = "mascloner"  # Fixed user for production
         
         result = subprocess.run([
-            "sudo", "-u", mascloner_user,
             "rclone", "--config", rclone_config,
             "config", "delete", "gdrive"
         ], capture_output=True, text=True, timeout=10)
