@@ -67,6 +67,144 @@ check_prerequisites() {
     echo_success "Prerequisites check passed"
 }
 
+cleanup_existing() {
+    echo_info "Checking for existing Cloudflare configuration..."
+    
+    local needs_cleanup=false
+    local cleanup_items=()
+    
+    # Check for existing tunnels
+    if [[ -f ~/.cloudflared/cert.pem ]] || [[ -d ~/.cloudflared ]]; then
+        echo_warning "Found existing cloudflared configuration in ~/.cloudflared/"
+        needs_cleanup=true
+        cleanup_items+=("Cloudflared certificates and config")
+    fi
+    
+    # Check for existing config files
+    if [[ -f "$INSTALL_DIR/etc/cloudflare-tunnel.yaml" ]] || [[ -f "$INSTALL_DIR/etc/cloudflare.env" ]]; then
+        echo_warning "Found existing tunnel configuration files"
+        needs_cleanup=true
+        cleanup_items+=("MasCloner tunnel configuration")
+    fi
+    
+    # Check for running tunnel service
+    if systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
+        echo_warning "MasCloner tunnel service is currently running"
+        needs_cleanup=true
+        cleanup_items+=("Running tunnel service")
+    fi
+    
+    # Check for existing tunnels in Cloudflare
+    if [[ -f ~/.cloudflared/cert.pem ]]; then
+        local tunnel_check=$(cloudflared tunnel list 2>/dev/null | grep -i mascloner || true)
+        if [[ -n "$tunnel_check" ]]; then
+            echo_warning "Found existing MasCloner tunnels in Cloudflare:"
+            echo "$tunnel_check"
+            needs_cleanup=true
+            cleanup_items+=("Cloudflare tunnel(s)")
+        fi
+    fi
+    
+    if [[ "$needs_cleanup" == true ]]; then
+        echo
+        echo_warning "Existing Cloudflare configuration detected:"
+        for item in "${cleanup_items[@]}"; do
+            echo "  • $item"
+        done
+        echo
+        echo_info "To ensure a clean setup, we can remove all existing configuration."
+        read -p "Remove all existing Cloudflare configuration and start fresh? (y/N): " -n 1 -r
+        echo
+        
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo_info "Cleaning up existing configuration..."
+            
+            # Stop tunnel service
+            if systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
+                echo_info "Stopping tunnel service..."
+                systemctl stop mascloner-tunnel.service || true
+                systemctl disable mascloner-tunnel.service || true
+            fi
+            
+            # Delete existing tunnels
+            if [[ -f ~/.cloudflared/cert.pem ]]; then
+                echo_info "Removing existing tunnels..."
+                local existing_tunnels=$(cloudflared tunnel list 2>/dev/null | grep -i mascloner | awk '{print $1}' || true)
+                for tunnel_id in $existing_tunnels; do
+                    if [[ -n "$tunnel_id" ]]; then
+                        echo_info "Deleting tunnel: $tunnel_id"
+                        cloudflared tunnel delete "$tunnel_id" --force 2>/dev/null || true
+                    fi
+                done
+            fi
+            
+            # Remove local files
+            echo_info "Removing local configuration files..."
+            rm -rf ~/.cloudflared/ || true
+            rm -f "$INSTALL_DIR/etc/cloudflare"* || true
+            rm -f "$INSTALL_DIR/logs/cloudflared.log" || true
+            
+            echo_success "Cleanup completed!"
+        else
+            echo_warning "Existing configuration will be preserved."
+            echo_warning "This may cause conflicts during setup."
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                echo_info "Setup cancelled. Run the script again to clean up first."
+                exit 0
+            fi
+        fi
+    else
+        echo_success "No existing configuration found"
+    fi
+}
+
+login_to_cloudflare() {
+    echo_info "=== CLOUDFLARE AUTHENTICATION ==="
+    echo_info "First, we need to authenticate with Cloudflare..."
+    echo
+    
+    local max_attempts=3
+    local attempt=1
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        echo_info "Attempt $attempt/$max_attempts: Logging into Cloudflare..."
+        echo_warning "This will open a browser authentication page."
+        echo_info "If you're on a headless server, copy the URL to your local browser."
+        echo
+        
+        if cloudflared tunnel login; then
+            echo_success "Cloudflare authentication successful!"
+            
+            # Verify certificate was created
+            if [[ -f ~/.cloudflared/cert.pem ]]; then
+                echo_success "Origin certificate found: ~/.cloudflared/cert.pem"
+                return 0
+            else
+                echo_warning "Authentication succeeded but certificate not found"
+            fi
+        else
+            echo_error "Cloudflare authentication failed"
+        fi
+        
+        if [[ $attempt -lt $max_attempts ]]; then
+            echo_warning "Authentication failed. Try again?"
+            read -p "Retry authentication? (y/N/q to quit): " -n 1 -r
+            echo
+            case $REPLY in
+                [Yy]) ((attempt++)); continue ;;
+                [Qq]) echo_info "Setup cancelled"; exit 0 ;;
+                *) echo_error "Authentication required to continue"; exit 1 ;;
+            esac
+        else
+            echo_error "Failed to authenticate after $max_attempts attempts"
+            echo_info "Please check your network connection and try again"
+            exit 1
+        fi
+    done
+}
+
 collect_configuration() {
     echo_info "Collecting Cloudflare configuration..."
     echo
@@ -76,7 +214,7 @@ collect_configuration() {
     echo "1. ✅ Cloudflare account with domain added"
     echo "2. ✅ Domain nameservers pointing to Cloudflare"
     echo "3. ✅ Zero Trust account enabled (free tier available)"
-    echo "4. ✅ API token created with Zone:Edit + Zone:Read permissions"
+    echo "4. ✅ API token created with Zone:Edit + Zone:Read + Account:Read permissions"
     echo
     read -p "Have you completed all prerequisites above? (y/N): " -n 1 -r
     echo
@@ -86,46 +224,114 @@ collect_configuration() {
         exit 1
     fi
     
-    # Domain and hostname
-    echo
-    echo_info "=== DOMAIN CONFIGURATION ==="
-    read -p "Enter your domain name (e.g., example.com): " DOMAIN
-    read -p "Enter hostname for MasCloner (e.g., mascloner): " HOSTNAME
-    FULL_HOSTNAME="${HOSTNAME}.${DOMAIN}"
+    # Domain and hostname with validation
+    local domain_validated=false
+    while [[ "$domain_validated" == false ]]; do
+        echo
+        echo_info "=== DOMAIN CONFIGURATION ==="
+        read -p "Enter your domain name (e.g., example.com): " DOMAIN
+        
+        # Basic domain validation
+        if [[ -z "$DOMAIN" ]]; then
+            echo_error "Domain cannot be empty"
+            continue
+        fi
+        
+        if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z0-9]$ ]]; then
+            echo_error "Invalid domain format"
+            read -p "Try again? (y/N): " -n 1 -r
+            echo
+            [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
+            continue
+        fi
+        
+        read -p "Enter hostname for MasCloner (e.g., mascloner): " HOSTNAME
+        
+        if [[ -z "$HOSTNAME" ]]; then
+            echo_error "Hostname cannot be empty"
+            continue
+        fi
+        
+        FULL_HOSTNAME="${HOSTNAME}.${DOMAIN}"
+        
+        echo
+        echo_info "Your MasCloner URL will be: https://${FULL_HOSTNAME}"
+        read -p "Is this correct? (y/N/r to retry): " -n 1 -r
+        echo
+        case $REPLY in
+            [Yy]) domain_validated=true ;;
+            [Rr]) continue ;;
+            *) echo_error "Configuration cancelled"; exit 1 ;;
+        esac
+    done
     
-    echo
-    echo_info "Your MasCloner URL will be: https://${FULL_HOSTNAME}"
-    read -p "Is this correct? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo_error "Configuration cancelled"
-        exit 1
-    fi
+    # Cloudflare API Token with validation and retry
+    local token_validated=false
+    local max_token_attempts=3
+    local token_attempt=1
     
-    # Cloudflare API Token (2024 best practice)
-    echo
-    echo_info "=== CLOUDFLARE API TOKEN ==="
-    echo_warning "Create an API token with these permissions:"
-    echo "• Zone:Edit (for DNS records)"
-    echo "• Zone:Read (for zone verification)"
-    echo "• Account:Read (for tunnel management)"
-    echo
-    echo_info "Create at: https://dash.cloudflare.com/profile/api-tokens"
-    echo_info "Use the 'Custom token' option for precise permissions"
-    read -s -p "Enter Cloudflare API Token: " CF_API_TOKEN
-    echo
-    
-    # Validate API token
-    echo_info "Validating API token..."
-    if curl -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" | grep -q '"success":true'; then
-        echo_success "API token validated successfully"
-    else
-        echo_error "API token validation failed"
-        echo_info "Please check your token permissions and try again"
-        exit 1
-    fi
+    while [[ "$token_validated" == false && $token_attempt -le $max_token_attempts ]]; do
+        echo
+        echo_info "=== CLOUDFLARE API TOKEN (Attempt $token_attempt/$max_token_attempts) ==="
+        echo_warning "Create an API token with these permissions:"
+        echo "• Zone:Edit (for DNS records)"
+        echo "• Zone:Read (for zone verification)"
+        echo "• Account:Read (for tunnel management)"
+        echo
+        echo_info "Create at: https://dash.cloudflare.com/profile/api-tokens"
+        echo_info "Use the 'Custom token' option for precise permissions"
+        read -s -p "Enter Cloudflare API Token: " CF_API_TOKEN
+        echo
+        
+        if [[ -z "$CF_API_TOKEN" ]]; then
+            echo_error "API token cannot be empty"
+            ((token_attempt++))
+            continue
+        fi
+        
+        # Validate API token
+        echo_info "Validating API token..."
+        local token_response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+        
+        if echo "$token_response" | grep -q '"success":true'; then
+            echo_success "API token validated successfully"
+            
+            # Check token permissions
+            local token_status=$(echo "$token_response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+            if [[ "$token_status" == "active" ]]; then
+                echo_success "API token is active and working"
+                token_validated=true
+            else
+                echo_warning "API token status: $token_status"
+                echo_warning "Token may have limited functionality"
+                read -p "Continue anyway? (y/N): " -n 1 -r
+                echo
+                [[ $REPLY =~ ^[Yy]$ ]] && token_validated=true
+            fi
+        else
+            echo_error "API token validation failed"
+            echo_info "Response: $token_response"
+            
+            if [[ $token_attempt -lt $max_token_attempts ]]; then
+                echo_warning "Possible issues:"
+                echo "• Token may be invalid or expired"
+                echo "• Insufficient permissions (need Zone:Edit, Zone:Read, Account:Read)"
+                echo "• Network connectivity issue"
+                read -p "Try again with a different token? (y/N/q to quit): " -n 1 -r
+                echo
+                case $REPLY in
+                    [Yy]) ((token_attempt++)); continue ;;
+                    [Qq]) echo_info "Setup cancelled"; exit 0 ;;
+                    *) echo_error "Valid API token required to continue"; exit 1 ;;
+                esac
+            else
+                echo_error "Failed to validate API token after $max_token_attempts attempts"
+                exit 1
+            fi
+        fi
+    done
     
     # Zone ID with auto-detection
     echo
@@ -229,36 +435,94 @@ create_tunnel() {
 }
 
 configure_dns() {
-    echo_info "Configuring DNS record..."
+    echo_info "=== DNS CONFIGURATION ==="
+    echo_info "Creating DNS record for tunnel access..."
     
-    # Create DNS record pointing to tunnel
-    echo_info "Creating CNAME record: $FULL_HOSTNAME → $TUNNEL_ID.cfargotunnel.com"
+    local dns_success=false
+    local max_dns_attempts=2
+    local dns_attempt=1
     
-    if [[ "$MASCLONER_USER" == "root" ]]; then
-        DNS_OUTPUT=$(cloudflared tunnel route dns "$TUNNEL_ID" "$FULL_HOSTNAME" 2>&1)
-    else
-        DNS_OUTPUT=$(sudo -u "$MASCLONER_USER" cloudflared tunnel route dns "$TUNNEL_ID" "$FULL_HOSTNAME" 2>&1)
-    fi
-    
-    echo_info "DNS configuration output:"
-    echo "$DNS_OUTPUT"
-    
-    if echo "$DNS_OUTPUT" | grep -q "error\|Error\|ERROR"; then
-        echo_warning "DNS configuration may have failed"
-        echo_warning "You may need to manually create a CNAME record:"
-        echo_info "Record type: CNAME"
-        echo_info "Name: $HOSTNAME"
-        echo_info "Target: $TUNNEL_ID.cfargotunnel.com"
-        echo_info "TTL: Auto"
-        echo
-        read -p "Continue anyway? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo_error "DNS configuration failed"
-            exit 1
+    while [[ "$dns_success" == false && $dns_attempt -le $max_dns_attempts ]]; do
+        echo_info "Attempt $dns_attempt/$max_dns_attempts: Creating CNAME record"
+        echo_info "Record: $FULL_HOSTNAME → $TUNNEL_ID.cfargotunnel.com"
+        
+        # Create DNS record pointing to tunnel
+        local dns_output
+        if [[ "$MASCLONER_USER" == "root" ]]; then
+            dns_output=$(cloudflared tunnel route dns "$TUNNEL_ID" "$FULL_HOSTNAME" 2>&1)
+        else
+            dns_output=$(sudo -u "$MASCLONER_USER" cloudflared tunnel route dns "$TUNNEL_ID" "$FULL_HOSTNAME" 2>&1)
         fi
+        
+        echo_info "DNS configuration output:"
+        echo "$dns_output"
+        
+        # Check for success indicators
+        if echo "$dns_output" | grep -q -i "success\|created\|added"; then
+            echo_success "DNS record created successfully: $FULL_HOSTNAME"
+            dns_success=true
+        elif echo "$dns_output" | grep -q -i "already exists\|duplicate"; then
+            echo_warning "DNS record already exists"
+            read -p "DNS record exists. Continue with existing record? (y/N): " -n 1 -r
+            echo
+            [[ $REPLY =~ ^[Yy]$ ]] && dns_success=true
+        elif echo "$dns_output" | grep -q -i "error\|failed\|invalid"; then
+            echo_error "DNS record creation failed"
+            echo_info "Error details: $dns_output"
+            
+            if [[ $dns_attempt -lt $max_dns_attempts ]]; then
+                echo_warning "Possible issues:"
+                echo "• API token may lack Zone:Edit permissions"
+                echo "• Domain may not be managed by Cloudflare"
+                echo "• Network connectivity issue"
+                read -p "Retry DNS configuration? (y/N): " -n 1 -r
+                echo
+                [[ $REPLY =~ ^[Yy]$ ]] && ((dns_attempt++)) && continue
+            fi
+            
+            # Offer manual setup
+            echo_warning "⚠️  DNS automatic configuration failed"
+            echo_info "You can create the DNS record manually:"
+            echo
+            echo_warning "Manual DNS Setup Instructions:"
+            echo "1. Go to: https://dash.cloudflare.com/"
+            echo "2. Select your domain: $DOMAIN"
+            echo "3. Go to DNS > Records"
+            echo "4. Click 'Add record'"
+            echo "5. Configure:"
+            echo "   • Type: CNAME"
+            echo "   • Name: $HOSTNAME"
+            echo "   • Target: $TUNNEL_ID.cfargotunnel.com"
+            echo "   • Proxy status: Proxied (orange cloud)"
+            echo "   • TTL: Auto"
+            echo
+            read -p "Have you created the DNS record manually? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo_success "Manual DNS configuration confirmed"
+                dns_success=true
+            else
+                echo_error "DNS configuration is required to continue"
+                read -p "Continue anyway (tunnel may not be accessible)? (y/N): " -n 1 -r
+                echo
+                [[ $REPLY =~ ^[Yy]$ ]] && dns_success=true || exit 1
+            fi
+        else
+            echo_warning "DNS configuration result unclear"
+            echo_info "Output: $dns_output"
+            read -p "Assume DNS was configured successfully? (y/N): " -n 1 -r
+            echo
+            [[ $REPLY =~ ^[Yy]$ ]] && dns_success=true
+        fi
+        
+        [[ "$dns_success" == false ]] && ((dns_attempt++))
+    done
+    
+    if [[ "$dns_success" == true ]]; then
+        echo_success "DNS configuration completed"
     else
-        echo_success "DNS record created: $FULL_HOSTNAME"
+        echo_warning "DNS configuration may be incomplete"
+        echo_info "You may need to manually create the CNAME record later"
     fi
 }
 
@@ -479,21 +743,44 @@ print_completion() {
 
 # Main setup flow
 main() {
-    echo_info "Starting Cloudflare Tunnel setup for MasCloner..."
+    echo_info "🚀 Starting Cloudflare Tunnel setup for MasCloner..."
+    echo_info "This script will set up secure tunnel access to your MasCloner instance."
     echo
     
+    # Step 1: Prerequisites and cleanup
     check_prerequisites
+    cleanup_existing
+    
+    # Step 2: Authentication
+    login_to_cloudflare
+    
+    # Step 3: Configuration
     collect_configuration
+    
+    # Step 4: Tunnel creation
     create_tunnel
+    
+    # Step 5: DNS configuration
     configure_dns
+    
+    # Step 6: Local configuration
     create_tunnel_config
+    
+    # Step 7: Zero Trust setup (optional)
     setup_zero_trust
+    
+    # Step 8: Service installation
     install_tunnel_service
+    
+    # Step 9: Testing
     test_connection
+    
+    # Step 10: Completion
     print_completion
     
     echo
-    echo_success "Cloudflare Tunnel setup completed successfully! 🚀"
+    echo_success "🎉 Cloudflare Tunnel setup completed successfully!"
+    echo_info "Your MasCloner instance is now securely accessible via Cloudflare Tunnel."
 }
 
 # Handle script interruption
