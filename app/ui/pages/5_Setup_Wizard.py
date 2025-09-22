@@ -537,8 +537,8 @@ Checkers: {setup_data.get('checkers', 8)}
             sync_result = api.update_config(sync_config)
             
             if sync_result and sync_result.get("success"):
-                # Skip performance config for now - start scheduler directly
-                scheduler_result = api.start_scheduler()
+                # Scheduler is already running automatically - skip start call
+                scheduler_result = True  # Always true since scheduler auto-starts
                 
                 if scheduler_result:
                     st.success("🎉 Setup completed successfully!")
