@@ -107,31 +107,9 @@ install_cloudflared() {
         return 0
     fi
     
-    # Try repository method first
-    echo_info "Attempting repository installation..."
-    
-    # Add Cloudflare GPG key
-    mkdir -p --mode=0755 /usr/share/keyrings
-    if curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null; then
-        # Get the codename
-        CODENAME=$(lsb_release -cs)
-        echo_info "Detected Ubuntu codename: $CODENAME"
-        
-        # Add repository with proper codename expansion
-        echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $CODENAME main" | tee /etc/apt/sources.list.d/cloudflared.list
-        
-        # Try to install via repository
-        if apt update && apt install -y cloudflared 2>/dev/null; then
-            echo_success "cloudflared installed via repository"
-        else
-            echo_warning "Repository installation failed, trying direct download..."
-            rm -f /etc/apt/sources.list.d/cloudflared.list
-            install_cloudflared_direct
-        fi
-    else
-        echo_warning "Could not add repository, trying direct download..."
-        install_cloudflared_direct
-    fi
+    # Use direct download method (more reliable than repositories)
+    echo_info "Installing cloudflared via direct download (recommended method)..."
+    install_cloudflared_direct
     
     # Verify installation
     if command -v cloudflared &> /dev/null; then
@@ -146,6 +124,9 @@ install_cloudflared() {
 install_cloudflared_direct() {
     echo_info "Installing cloudflared via direct download..."
     
+    # Clean up any potential repository artifacts
+    rm -f /etc/apt/sources.list.d/cloudflared.list
+    
     # Detect architecture
     ARCH=$(uname -m)
     case $ARCH in
@@ -155,18 +136,27 @@ install_cloudflared_direct() {
         *) echo_error "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     
+    echo_info "Detected architecture: $ARCH -> cloudflared-linux-${CLOUDFLARED_ARCH}"
+    
     # Download latest cloudflared
     CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CLOUDFLARED_ARCH}"
     
-    echo_info "Downloading cloudflared for $ARCH..."
-    curl -L "$CLOUDFLARED_URL" -o /usr/local/bin/cloudflared
-    chmod +x /usr/local/bin/cloudflared
+    echo_info "Downloading from: $CLOUDFLARED_URL"
     
-    # Verify the download
-    if /usr/local/bin/cloudflared --version >/dev/null 2>&1; then
-        echo_success "cloudflared downloaded and installed successfully"
+    # Download with proper error handling
+    if curl -L --fail "$CLOUDFLARED_URL" -o /usr/local/bin/cloudflared; then
+        chmod +x /usr/local/bin/cloudflared
+        
+        # Verify the download
+        if /usr/local/bin/cloudflared --version >/dev/null 2>&1; then
+            echo_success "cloudflared downloaded and installed successfully"
+        else
+            echo_error "Downloaded cloudflared binary is not executable"
+            rm -f /usr/local/bin/cloudflared
+            exit 1
+        fi
     else
-        echo_error "Failed to download or execute cloudflared"
+        echo_error "Failed to download cloudflared from GitHub releases"
         exit 1
     fi
 }
