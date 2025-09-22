@@ -288,7 +288,7 @@ elif st.session_state.setup_step == 3:
                         
                         result = api.test_nextcloud_webdav(nc_url, nc_user, nc_pass, nc_remote_name)
                         
-                        if result and result.get("status") == "success":
+                        if result and result.get("success"):
                             st.success("✅ Nextcloud connection successful!")
                             st.success("✅ rclone remote created automatically!")
                             
@@ -303,7 +303,7 @@ elif st.session_state.setup_step == 3:
                             st.balloons()
                             st.rerun()
                         else:
-                            error_msg = result.get("error", "Unknown error") if result else "API error"
+                            error_msg = result.get("message", "Unknown error") if result else "API error"
                             st.error(f"❌ Connection failed: {error_msg}")
                             
                             st.markdown("""
