@@ -136,7 +136,7 @@ class RcloneRunner:
             f"--config={rclone_conf}",
             f"--log-file={log_file}",
             "--use-json-log",
-            "--log-format=DATE,TIME,LEVEL,PID",
+            "--log-format=date,time,pid",
             f"--log-level={self.rclone_config['log_level']}",
             "--stats=30s",
             "--stats-one-line",
