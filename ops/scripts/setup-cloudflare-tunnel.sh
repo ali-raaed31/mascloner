@@ -413,8 +413,13 @@ collect_configuration() {
                     
                     # Try to auto-detect zone ID for the specified domain
                     local auto_zone_id
-                    # Use jq-like parsing for better JSON handling
-                    auto_zone_id=$(echo "$json_response" | grep -A2 -B2 "\"name\":\"$DOMAIN\"" | grep '"id":' | head -1 | cut -d'"' -f4)
+                    # Better JSON parsing for zone ID extraction
+                    auto_zone_id=$(echo "$json_response" | grep -B1 -A1 "\"name\":\"$DOMAIN\"" | grep '"id"' | sed 's/.*"id":"\([^"]*\)".*/\1/' | head -1)
+                    
+                    # Alternative parsing method if first fails
+                    if [[ -z "$auto_zone_id" || "$auto_zone_id" == "id" ]]; then
+                        auto_zone_id=$(echo "$json_response" | sed 's/.*{"id":"\([^"]*\)".*"name":"'$DOMAIN'".*/\1/g' | head -1)
+                    fi
                     
                     if [[ -n "$auto_zone_id" ]]; then
                         echo_success "Auto-detected Zone ID for $DOMAIN: $auto_zone_id"
@@ -751,32 +756,74 @@ install_tunnel_service() {
     echo_info "Installing tunnel service..."
     
     # Find and copy credentials file to proper location
-    if [[ "$MASCLONER_USER" == "root" ]]; then
-        CLOUDFLARED_HOME="/root/.cloudflared"
-    else
-        CLOUDFLARED_HOME="/home/$MASCLONER_USER/.cloudflared"
-        if [[ ! -d "$CLOUDFLARED_HOME" ]]; then
-            CLOUDFLARED_HOME="$HOME/.cloudflared"
-        fi
+    echo_info "Looking for tunnel credentials..."
+    
+    # Check multiple possible locations for credentials
+    local cred_file=""
+    local search_locations=(
+        "/root/.cloudflared/"
+        "/srv/mascloner/.cloudflared/"
+        "$INSTALL_DIR/.cloudflared/"
+        "$HOME/.cloudflared/"
+        "/home/$MASCLONER_USER/.cloudflared/"
+    )
+    
+    # Also check for the specific tunnel credentials file created during setup
+    if [[ -n "$TUNNEL_ID" ]]; then
+        search_locations+=(
+            "/root/.cloudflared/${TUNNEL_ID}.json"
+            "/srv/mascloner/.cloudflared/${TUNNEL_ID}.json"
+            "$INSTALL_DIR/.cloudflared/${TUNNEL_ID}.json"
+        )
     fi
     
-    echo_info "Looking for credentials in: $CLOUDFLARED_HOME"
-    
-    if [[ -d "$CLOUDFLARED_HOME" ]]; then
-        CRED_FILE=$(find "$CLOUDFLARED_HOME" -name "*.json" | head -1)
-        if [[ -n "$CRED_FILE" ]]; then
-            echo_info "Found credentials file: $CRED_FILE"
-            cp "$CRED_FILE" "$INSTALL_DIR/etc/cloudflare-credentials.json"
-            if [[ "$MASCLONER_USER" != "root" ]]; then
-                chown "$MASCLONER_USER:$MASCLONER_USER" "$INSTALL_DIR/etc/cloudflare-credentials.json"
+    echo_info "Searching in multiple locations..."
+    for location in "${search_locations[@]}"; do
+        echo_info "Checking: $location"
+        
+        if [[ -f "$location" ]]; then
+            # Direct file
+            cred_file="$location"
+            echo_success "Found credentials file: $cred_file"
+            break
+        elif [[ -d "$location" ]]; then
+            # Directory - look for JSON files
+            local found_file=$(find "$location" -name "*.json" -type f | head -1)
+            if [[ -n "$found_file" ]]; then
+                cred_file="$found_file"
+                echo_success "Found credentials file: $cred_file"
+                break
             fi
-            chmod 600 "$INSTALL_DIR/etc/cloudflare-credentials.json"
-            echo_success "Credentials file copied successfully"
+        fi
+    done
+    
+    if [[ -n "$cred_file" ]]; then
+        echo_info "Copying credentials to: $INSTALL_DIR/etc/cloudflare-credentials.json"
+        cp "$cred_file" "$INSTALL_DIR/etc/cloudflare-credentials.json"
+        
+        # Set proper ownership and permissions
+        if [[ "$MASCLONER_USER" != "root" ]]; then
+            chown "$MASCLONER_USER:$MASCLONER_USER" "$INSTALL_DIR/etc/cloudflare-credentials.json"
+        fi
+        chmod 600 "$INSTALL_DIR/etc/cloudflare-credentials.json"
+        echo_success "Credentials file copied and secured"
+        
+        # Verify the file content
+        if [[ -s "$INSTALL_DIR/etc/cloudflare-credentials.json" ]]; then
+            echo_success "Credentials file verification passed"
         else
-            echo_warning "No credentials file found in $CLOUDFLARED_HOME"
+            echo_error "Credentials file is empty"
+            exit 1
         fi
     else
-        echo_warning "Cloudflared directory not found: $CLOUDFLARED_HOME"
+        echo_error "Could not find tunnel credentials file"
+        echo_warning "Searched locations:"
+        for location in "${search_locations[@]}"; do
+            echo "  • $location"
+        done
+        echo_info "The tunnel was created but credentials may be in an unexpected location"
+        echo_info "You may need to manually copy the credentials file"
+        exit 1
     fi
     
     # Validate configuration before starting service
