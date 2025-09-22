@@ -23,7 +23,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from streamlit_app import APIClient, API_BASE_URL
+from api_client import APIClient
 
 # Initialize API client
 api = APIClient()

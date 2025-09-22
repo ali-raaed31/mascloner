@@ -36,8 +36,8 @@ MasCloner is a production-ready admin UI + API system for managing automated one
 
 1. **Clone repository**:
    ```bash
-   git clone https://github.com/mascloner/mascloner.git
-   cd MasCloner
+   git clone https://github.com/ali-raaed31/mascloner.git
+   cd mascloner
    ```
 
 2. **Create virtual environment**:

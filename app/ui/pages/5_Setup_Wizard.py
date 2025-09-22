@@ -21,7 +21,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from streamlit_app import APIClient
+from api_client import APIClient
 
 # Initialize API client
 api = APIClient()
@@ -30,7 +30,7 @@ st.title("🧙‍♂️ MasCloner Setup Wizard")
 st.markdown("Welcome! This wizard will help you configure MasCloner for first-time use.")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
@@ -114,7 +114,7 @@ elif st.session_state.setup_step == 2:
         # Test connection button
         if st.button("🔄 Test Connection Again"):
             with st.spinner("Testing Google Drive connection..."):
-                result = api.post("/test/gdrive", {"remote": st.session_state.setup_data['gdrive_remote']})
+                result = api.test_gdrive(st.session_state.setup_data['gdrive_remote'])
                 if result and result.get("status") == "success":
                     st.success("✅ Google Drive connection successful!")
                 else:
@@ -160,7 +160,7 @@ elif st.session_state.setup_step == 2:
         with col1:
             if st.button("🧪 Test Connection", type="primary"):
                 with st.spinner("Testing Google Drive connection..."):
-                    result = api.post("/test/gdrive", {"remote": gdrive_remote_name})
+                    result = api.test_gdrive(gdrive_remote_name)
                     if result and result.get("status") == "success":
                         st.success("✅ Google Drive connection successful!")
                         st.session_state.setup_data["gdrive_remote"] = gdrive_remote_name
@@ -217,7 +217,7 @@ elif st.session_state.setup_step == 3:
         # Test connection button
         if st.button("🔄 Test Connection Again"):
             with st.spinner("Testing Nextcloud connection..."):
-                result = api.post("/test/nextcloud", {"remote": st.session_state.setup_data['nc_remote']})
+                result = api.test_nextcloud(st.session_state.setup_data['nc_remote'])
                 if result and result.get("status") == "success":
                     st.success("✅ Nextcloud connection successful!")
                 else:
@@ -309,7 +309,7 @@ elif st.session_state.setup_step == 3:
                             "remote_name": nc_remote_name
                         }
                         
-                        result = api.post("/test/nextcloud/webdav", test_data)
+                        result = api.test_nextcloud_webdav(nc_url, nc_user, nc_pass, nc_remote_name)
                         
                         if result and result.get("status") == "success":
                             st.success("✅ Nextcloud connection successful!")
@@ -372,7 +372,7 @@ elif st.session_state.setup_step == 4:
         
         if st.button("🔍 Browse Google Drive Folders"):
             with st.spinner("Loading Google Drive folders..."):
-                folders = api.get(f"/browse/folders/{gdrive_remote}")
+                folders = api.browse_folders(gdrive_remote)
                 if folders and folders.get("status") == "success":
                     st.session_state["gdrive_folders"] = folders.get("folders", [])
                     st.success(f"✅ Found {len(folders.get('folders', []))} folders")
@@ -419,7 +419,7 @@ elif st.session_state.setup_step == 4:
         
         if st.button("🔍 Browse Nextcloud Folders"):
             with st.spinner("Loading Nextcloud folders..."):
-                folders = api.get(f"/browse/folders/{nc_remote}")
+                folders = api.browse_folders(nc_remote)
                 if folders and folders.get("status") == "success":
                     st.session_state["nc_folders"] = folders.get("folders", [])
                     st.success(f"✅ Found {len(folders.get('folders', []))} folders")
@@ -483,7 +483,7 @@ Files will be synced one-way (Google Drive → Nextcloud).
         # Folder size estimation (if available)
         if st.button("📊 Estimate Sync Size"):
             with st.spinner("Calculating folder sizes..."):
-                size_info = api.get(f"/estimate/size?source={source_path}&dest={dest_path}")
+                size_info = api.estimate_size(source_path, dest_path)
                 if size_info and size_info.get("status") == "success":
                     st.success(f"📁 Estimated size: {size_info.get('size_mb', 0)} MB ({size_info.get('file_count', 0)} files)")
                 else:
@@ -553,7 +553,7 @@ Checkers: {setup_data.get('checkers', 8)}
                 "nc_dest_path": setup_data.get("nc_dest_path")
             }
             
-            sync_result = api.post("/config", sync_config)
+            sync_result = api.update_config(sync_config)
             
             if sync_result and sync_result.get("status") == "success":
                 # Save performance configuration
@@ -564,11 +564,11 @@ Checkers: {setup_data.get('checkers', 8)}
                     "checkers": setup_data.get("checkers")
                 }
                 
-                perf_result = api.post("/config/performance", perf_config)
+                perf_result = api.update_config(perf_config)
                 
                 if perf_result and perf_result.get("status") == "success":
                     # Start scheduler
-                    scheduler_result = api.post("/schedule/start", {})
+                    scheduler_result = api.start_scheduler()
                     
                     if scheduler_result:
                         st.success("🎉 Setup completed successfully!")

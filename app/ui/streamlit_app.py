@@ -5,10 +5,9 @@ Main entry point for the web interface.
 """
 
 import streamlit as st
-import httpx
-import json
 from typing import Dict, Any, Optional
 from datetime import datetime
+from api_client import APIClient
 
 # Configure Streamlit page
 st.set_page_config(
@@ -17,37 +16,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# API Configuration
-API_BASE_URL = "http://127.0.0.1:8787"
-
-class APIClient:
-    """Client for communicating with MasCloner API."""
-    
-    def __init__(self, base_url: str = API_BASE_URL):
-        self.base_url = base_url
-        
-    def get(self, endpoint: str) -> Optional[Dict[str, Any]]:
-        """Make GET request to API."""
-        try:
-            with httpx.Client() as client:
-                response = client.get(f"{self.base_url}{endpoint}")
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            st.error(f"API Error: {e}")
-            return None
-    
-    def post(self, endpoint: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Make POST request to API."""
-        try:
-            with httpx.Client() as client:
-                response = client.post(f"{self.base_url}{endpoint}", json=data)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            st.error(f"API Error: {e}")
-            return None
 
 # Initialize API client
 @st.cache_resource
@@ -63,7 +31,7 @@ st.sidebar.markdown("---")
 # Check API connection
 def check_api_connection():
     """Check if API is available."""
-    status = api.get("/status")
+    status = api.get_status()
     if status:
         st.sidebar.success("✅ API Connected")
         return True
@@ -86,7 +54,7 @@ if not api_connected:
     st.stop()
 
 # Get status information
-status = api.get("/status")
+    status = api.get_status()
 if status:
     col1, col2, col3, col4 = st.columns(4)
     
@@ -134,7 +102,7 @@ st.markdown("---")
 # Recent Runs
 st.subheader("📊 Recent Sync Runs")
 
-runs = api.get("/runs")
+runs = api.get_runs()
 if runs:
     if len(runs) == 0:
         st.info("No sync runs yet. The first run will occur automatically.")
@@ -167,21 +135,21 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     if st.button("🔄 Trigger Sync Now", type="primary"):
-        result = api.post("/trigger", {})
+        result = api.trigger_sync()
         if result:
             st.success("Sync triggered successfully!")
             st.rerun()
 
 with col2:
     if st.button("⏸️ Pause Scheduler"):
-        result = api.post("/schedule/stop", {})
+        result = api.stop_scheduler()
         if result:
             st.success("Scheduler paused!")
             st.rerun()
 
 with col3:
     if st.button("▶️ Resume Scheduler"):
-        result = api.post("/schedule/start", {})
+        result = api.start_scheduler()
         if result:
             st.success("Scheduler resumed!")
             st.rerun()

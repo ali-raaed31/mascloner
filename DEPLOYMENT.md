@@ -26,7 +26,7 @@ The installation uses Linux best practices with a dedicated `mascloner` system u
 
 ```bash
 # Clone repository
-git clone https://github.com/mascloner/mascloner.git
+git clone https://github.com/ali-raaed31/mascloner.git
 cd mascloner
 
 # Run installer (as root)

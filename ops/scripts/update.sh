@@ -8,7 +8,7 @@ set -euo pipefail
 INSTALL_DIR="/srv/mascloner"
 MASCLONER_USER="mascloner"
 BACKUP_DIR="/var/backups/mascloner"
-GIT_REPO="https://github.com/mascloner/mascloner.git"
+GIT_REPO="https://github.com/ali-raaed31/mascloner.git"
 
 # Colors
 GREEN='\033[0;32m'
