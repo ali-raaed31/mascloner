@@ -31,7 +31,7 @@ api = APIClient()
 st.title("📋 Sync Runs & Events")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
@@ -43,7 +43,7 @@ with tab1:
     st.header("📊 Sync Runs Overview")
     
     # Get runs data
-    runs = api.get("/runs")
+    runs = api.get_runs()
     
     if not runs:
         st.info("No sync runs recorded yet.")
@@ -170,7 +170,7 @@ with tab2:
     st.header("📂 File Events")
     
     # Get events data
-    events = api.get("/events")
+    events = api.get_events()
     
     if not events:
         st.info("No file events recorded yet.")

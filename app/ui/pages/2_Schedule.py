@@ -29,7 +29,7 @@ api = APIClient()
 st.title("⏰ Sync Schedule Configuration")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
@@ -62,7 +62,7 @@ st.markdown("---")
 st.header("🛠️ Schedule Settings")
 
 # Get current configuration
-config = api.get("/config")
+config = api.get_config()
 current_interval = 5  # Default
 current_jitter = 20   # Default
 

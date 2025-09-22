@@ -30,7 +30,7 @@ st.title("🌳 File Tree Viewer")
 st.markdown("Explore your synced files with real-time status indicators")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
@@ -216,7 +216,7 @@ def count_files_in_folder(folder_node: Dict[str, Any]) -> int:
 try:
     # Get tree data from API
     with st.spinner("Loading file tree..."):
-        tree_response = api.get(f"/tree?path={base_path}")
+        tree_response = api.get_tree(base_path)
     
     if not tree_response:
         st.error("Failed to load file tree data")

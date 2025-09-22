@@ -29,13 +29,13 @@ api = APIClient()
 st.title("⚙️ MasCloner Settings")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
 
 # Get current configuration
-config = api.get("/config")
+config = api.get_config()
 if not config:
     st.error("Failed to load configuration")
     st.stop()
@@ -248,7 +248,7 @@ st.header("✅ Configuration Validation")
 
 if st.button("🔍 Validate All Settings", type="primary", use_container_width=True):
     with st.spinner("Validating configuration..."):
-        result = api.get("/config/validate")
+        result = api.validate_config()
         
         if result:
             if result.get("valid", False):

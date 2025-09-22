@@ -31,7 +31,7 @@ api = APIClient()
 st.title("📊 MasCloner Dashboard")
 
 # Check API connection
-status = api.get("/status")
+status = api.get_status()
 if not status:
     st.error("Cannot connect to MasCloner API")
     st.stop()
@@ -78,7 +78,7 @@ st.markdown("---")
 st.header("🕒 Recent Activity")
 
 # Get recent runs
-runs = api.get("/runs")
+runs = api.get_runs()
 if runs and len(runs) > 0:
     # Summary stats from recent runs
     recent_runs = runs[:5]  # Last 5 runs
@@ -132,7 +132,7 @@ st.markdown("---")
 st.header("🌳 File Tree Preview")
 
 # Get tree data
-tree_data = api.get("/tree")
+tree_data = api.get_tree()
 if tree_data:
     col1, col2, col3 = st.columns(3)
     

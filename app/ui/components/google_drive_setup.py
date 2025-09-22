@@ -224,22 +224,13 @@ class GoogleDriveSetup:
     def _create_rclone_config(self, token: str, scope: str) -> Dict[str, Any]:
         """Create rclone configuration with the provided token"""
         try:
-            # This would be implemented as an API endpoint
-            # For now, we'll simulate the rclone config creation
-            cmd = [
-                "sudo", "-u", self.mascloner_user,
-                "rclone", "--config", self.rclone_config,
-                "config", "create", "gdrive", "drive",
-                f"scope={scope}",
-                f"token={token}"
-            ]
+            # Use the API client to configure Google Drive
+            result = self.api.configure_google_drive_oauth(token=token, scope=scope)
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
+            if result and result.get("success"):
                 return {"success": True}
             else:
-                return {"success": False, "error": result.stderr or "Configuration failed"}
+                return {"success": False, "error": result.get("message", "Configuration failed") if result else "API call failed"}
                 
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -247,29 +238,13 @@ class GoogleDriveSetup:
     def _test_connection(self) -> Dict[str, Any]:
         """Test the Google Drive connection"""
         try:
-            cmd = [
-                "sudo", "-u", self.mascloner_user,
-                "rclone", "--config", self.rclone_config,
-                "--transfers=4", "--checkers=8",
-                "lsd", "gdrive:"
-            ]
+            # Use the API client to test the connection
+            result = self.api.test_google_drive_connection()
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                # Parse folder list
-                folders = []
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip():
-                        # Extract folder name from rclone lsd output
-                        parts = line.strip().split()
-                        if len(parts) >= 5:
-                            folder_name = ' '.join(parts[4:])
-                            folders.append(folder_name)
-                
-                return {"success": True, "folders": folders}
+            if result and result.get("success"):
+                return {"success": True, "folders": result.get("data", {}).get("folders", [])}
             else:
-                return {"success": False, "error": result.stderr or "Connection test failed"}
+                return {"success": False, "error": result.get("message", "Connection failed") if result else "API call failed"}
                 
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -277,22 +252,14 @@ class GoogleDriveSetup:
     def _check_gdrive_status(self) -> Dict[str, Any]:
         """Check current Google Drive configuration status"""
         try:
-            # Check if gdrive remote exists
-            cmd = [
-                "sudo", "-u", self.mascloner_user,
-                "rclone", "--config", self.rclone_config,
-                "listremotes"
-            ]
+            # Use the API client to get status
+            result = self.api.get_google_drive_status()
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0 and "gdrive:" in result.stdout:
-                # Get some sample folders
-                test_result = self._test_connection()
+            if result:
                 return {
-                    "configured": True,
-                    "scope": "drive.readonly",  # Would need to parse from config
-                    "sample_folders": test_result.get("folders", [])[:3] if test_result["success"] else []
+                    "configured": result.get("configured", False),
+                    "scope": result.get("scope", "unknown"),
+                    "sample_folders": result.get("folders", [])
                 }
             else:
                 return {"configured": False}
@@ -303,14 +270,9 @@ class GoogleDriveSetup:
     def _remove_gdrive_config(self) -> bool:
         """Remove existing Google Drive configuration"""
         try:
-            cmd = [
-                "sudo", "-u", self.mascloner_user,
-                "rclone", "--config", self.rclone_config,
-                "config", "delete", "gdrive"
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            return result.returncode == 0
+            # Use the API client to remove configuration
+            result = self.api.remove_google_drive_config()
+            return result and result.get("success", False)
             
         except Exception:
             return False

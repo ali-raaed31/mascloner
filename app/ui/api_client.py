@@ -145,3 +145,7 @@ class APIClient:
     def remove_google_drive_config(self) -> Optional[Dict[str, Any]]:
         """Remove Google Drive configuration."""
         return self._make_request("DELETE", "/oauth/google-drive")
+    
+    def validate_config(self) -> Optional[Dict[str, Any]]:
+        """Validate configuration."""
+        return self._make_request("GET", "/config/validate")

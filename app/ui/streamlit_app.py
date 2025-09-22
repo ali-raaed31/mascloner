@@ -54,7 +54,7 @@ if not api_connected:
     st.stop()
 
 # Get status information
-    status = api.get_status()
+status = api.get_status()
 if status:
     col1, col2, col3, col4 = st.columns(4)
     

@@ -8,6 +8,7 @@ import streamlit as st
 import httpx
 from typing import Dict, Any, Optional
 import json
+from components.google_drive_setup import GoogleDriveSetup
 
 # Page config
 st.set_page_config(
@@ -99,80 +100,56 @@ if st.session_state.setup_step == 1:
 elif st.session_state.setup_step == 2:
     st.header("📁 Google Drive Setup")
     
-    st.markdown("""
-    We'll configure **Google Drive** access using rclone with OAuth authentication.
-    This requires a quick CLI setup with guided instructions.
-    """)
+    # Initialize the Google Drive setup component
+    gdrive_setup = GoogleDriveSetup(api)
     
-    # Check if already configured
-    if "gdrive_remote" in st.session_state.setup_data:
-        st.success("✅ Google Drive already configured!")
+    # Check if already configured via API
+    status_response = api.get_google_drive_status()
+    is_configured = status_response and status_response.get("configured", False)
+    
+    if is_configured:
+        st.success("✅ Google Drive is already configured!")
         
-        # Show current config
-        st.info(f"Remote name: **{st.session_state.setup_data['gdrive_remote']}**")
+        # Show configuration details
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Remote Name", "gdrive")
+            st.metric("Status", "Configured")
+        with col2:
+            if status_response.get("scope"):
+                st.metric("Access Level", status_response["scope"])
+            if status_response.get("folders"):
+                st.metric("Folders Found", len(status_response["folders"]))
+        
+        # Show some sample folders
+        if status_response.get("folders"):
+            st.write("**Sample folders found:**")
+            for folder in status_response["folders"][:5]:
+                st.write(f"📁 {folder}")
         
         # Test connection button
         if st.button("🔄 Test Connection Again"):
             with st.spinner("Testing Google Drive connection..."):
-                result = api.test_gdrive(st.session_state.setup_data['gdrive_remote'])
-                if result and result.get("status") == "success":
+                result = api.test_google_drive_connection()
+                if result and result.get("success"):
                     st.success("✅ Google Drive connection successful!")
+                    if result.get("data", {}).get("folders"):
+                        st.write("**Recent test - folders found:**")
+                        for folder in result["data"]["folders"][:5]:
+                            st.write(f"📁 {folder}")
                 else:
-                    error_msg = result.get("error", "Unknown error") if result else "API error"
-                    st.error(f"❌ Connection failed: {error_msg}")
-                    st.session_state.setup_data.pop("gdrive_remote", None)
-                    st.rerun()
+                    st.error(f"❌ Connection failed: {result.get('message', 'Unknown error') if result else 'API error'}")
+        
+        # Mark as configured in session state
+        st.session_state.setup_data["gdrive_configured"] = True
     
     else:
-        # Setup instructions
-        st.subheader("🛠️ Step-by-Step Setup")
-        
-        st.markdown("""
-        **Follow these exact steps:**
-        
-        1. **Open a terminal/SSH session** to your server
-        2. **Switch to the mascloner user:**
-        """)
-        
-        st.code("sudo -u mascloner -i")
-        
-        st.markdown("3. **Create the Google Drive remote:**")
-        
-        gdrive_remote_name = st.text_input(
-            "Remote name",
-            value="gdrive",
-            help="Choose a name for your Google Drive remote"
-        )
-        
-        st.code(f"rclone config create {gdrive_remote_name} drive")
-        
-        st.markdown("""
-        4. **Follow the OAuth flow** that opens in your browser
-        5. **Test the connection:**
-        """)
-        
-        st.code(f"rclone lsd {gdrive_remote_name}:")
-        
-        st.markdown("6. **Click the test button below** when complete:")
-        
-        # Test button
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if st.button("🧪 Test Connection", type="primary"):
-                with st.spinner("Testing Google Drive connection..."):
-                    result = api.test_gdrive(gdrive_remote_name)
-                    if result and result.get("status") == "success":
-                        st.success("✅ Google Drive connection successful!")
-                        st.session_state.setup_data["gdrive_remote"] = gdrive_remote_name
-                        st.balloons()
-                        st.rerun()
-                    else:
-                        error_msg = result.get("error", "Unknown error") if result else "API error"
-                        st.error(f"❌ Connection failed: {error_msg}")
-                        st.info("💡 Make sure you completed all steps above")
-        
-        with col2:
-            st.info("Complete the CLI setup first, then test the connection")
+        # Render the Google Drive setup interface
+        setup_success = gdrive_setup.render_setup_instructions()
+        if setup_success:
+            st.balloons()
+            st.session_state.setup_data["gdrive_configured"] = True
+            st.rerun()
     
     # Navigation
     st.markdown("---")
@@ -183,7 +160,7 @@ elif st.session_state.setup_step == 2:
             st.rerun()
     
     with col2:
-        if "gdrive_remote" in st.session_state.setup_data:
+        if is_configured or st.session_state.setup_data.get("gdrive_configured"):
             if st.button("▶️ Next: Nextcloud Setup", type="primary", use_container_width=True):
                 st.session_state.setup_step = 3
                 st.rerun()
