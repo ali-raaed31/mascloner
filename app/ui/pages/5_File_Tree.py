@@ -26,14 +26,32 @@ from api_client import APIClient
 # Initialize API client
 api = APIClient()
 
-st.title("🌳 File Tree Viewer")
-st.markdown("Explore your synced files with real-time status indicators")
+st.title("🌳 File Tree Explorer")
+st.markdown("**Explore your synced files with real-time status indicators**")
+st.markdown("Browse your file structure and monitor sync status for individual files and folders.")
 
 # Check API connection
 status = api.get_status()
 if not status:
-    st.error("Cannot connect to MasCloner API")
+    st.error("❌ Cannot connect to MasCloner API")
     st.stop()
+
+# Quick navigation
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    if st.button("🏠 Home", use_container_width=True):
+        st.switch_page("streamlit_app.py")
+with col2:
+    if st.button("⚙️ Settings", use_container_width=True):
+        st.switch_page("pages/2_Settings.py")
+with col3:
+    if st.button("📋 History", use_container_width=True):
+        st.switch_page("pages/3_Runs_and_Events.py")
+with col4:
+    if st.button("🔧 Setup Wizard", use_container_width=True):
+        st.switch_page("pages/4_Setup_Wizard.py")
+
+st.markdown("---")
 
 # Sidebar controls
 with st.sidebar:

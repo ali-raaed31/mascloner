@@ -28,13 +28,31 @@ from api_client import APIClient
 # Initialize API client
 api = APIClient()
 
-st.title("📋 Sync Runs & Events")
+st.title("📋 Sync History & Events")
+st.markdown("Track all your sync runs and file events in detail")
 
 # Check API connection
 status = api.get_status()
 if not status:
-    st.error("Cannot connect to MasCloner API")
+    st.error("❌ Cannot connect to MasCloner API")
     st.stop()
+
+# Quick navigation
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    if st.button("🏠 Home", use_container_width=True):
+        st.switch_page("streamlit_app.py")
+with col2:
+    if st.button("⚙️ Settings", use_container_width=True):
+        st.switch_page("pages/2_Settings.py")
+with col3:
+    if st.button("🔧 Setup Wizard", use_container_width=True):
+        st.switch_page("pages/4_Setup_Wizard.py")
+with col4:
+    if st.button("🌳 File Tree", use_container_width=True):
+        st.switch_page("pages/5_File_Tree.py")
+
+st.markdown("---")
 
 # Tabs for different views
 tab1, tab2, tab3 = st.tabs(["📊 Runs Overview", "📂 File Events", "📈 Statistics"])
@@ -149,7 +167,7 @@ with tab1:
                     "Added": run.get("num_added", 0),
                     "Updated": run.get("num_updated", 0),
                     "Errors": run.get("errors", 0),
-                    "Size (MB)": round(run.get("bytes", 0) / 1024 / 1024, 2) if run.get("bytes") else 0
+                    "Size (MB)": round(run.get("bytes_transferred", 0) / 1024 / 1024, 2) if run.get("bytes_transferred") else 0
                 })
             
             df_runs = pd.DataFrame(runs_data)
@@ -287,7 +305,7 @@ with tab3:
                     "Files Added": run.get("num_added", 0),
                     "Files Updated": run.get("num_updated", 0),
                     "Errors": run.get("errors", 0),
-                    "Size (MB)": round(run.get("bytes", 0) / 1024 / 1024, 2)
+                    "Size (MB)": round(run.get("bytes_transferred", 0) / 1024 / 1024, 2)
                 })
         
         if chart_data:
