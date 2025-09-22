@@ -439,7 +439,7 @@ print_next_steps() {
     echo "- 🌐 Use Cloudflare Tunnel for secure external access"
     echo "- 🛡️ Review firewall settings for your environment"
     echo
-    echo_info "📚 Documentation: https://github.com/mascloner/mascloner"
+    echo_info "📚 Documentation: https://github.com/ali-raaed31/mascloner"
     echo_info "📝 Installation log: $LOG_FILE"
 }
 

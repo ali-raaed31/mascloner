@@ -90,31 +90,81 @@ update_code() {
     local current_dir
     current_dir=$(pwd)
     
-    # Check if this is a git repository
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        echo_info "Updating via git pull..."
-        cd "$INSTALL_DIR"
-        
-        # Stash any local changes
-        sudo -u "$MASCLONER_USER" git stash
-        
-        # Pull latest changes
-        sudo -u "$MASCLONER_USER" git pull origin main
-        
-        # Check if pull was successful
-        if [[ $? -eq 0 ]]; then
-            echo_success "Code updated successfully"
-        else
-            echo_error "Git pull failed"
-            cd "$current_dir"
-            exit 1
-        fi
-    else
-        echo_warning "Not a git repository. Manual code update required."
-        echo_info "Please update the code manually and run this script again."
+    # Create temporary directory for git clone
+    local temp_dir="/tmp/mascloner-update-$$"
+    
+    echo_info "Cloning latest code from repository..."
+    git clone "$GIT_REPO" "$temp_dir"
+    
+    if [[ $? -ne 0 ]]; then
+        echo_error "Failed to clone repository"
+        rm -rf "$temp_dir"
         exit 1
     fi
     
+    echo_info "Copying updated files to production directory..."
+    
+    # Preserve important directories/files that shouldn't be overwritten
+    local preserve_paths=(
+        "data"
+        "logs" 
+        "etc"
+        ".env"
+        ".venv"
+    )
+    
+    # Create backup of preserved paths
+    local backup_temp="/tmp/mascloner-preserve-$$"
+    mkdir -p "$backup_temp"
+    
+    for path in "${preserve_paths[@]}"; do
+        if [[ -e "$INSTALL_DIR/$path" ]]; then
+            cp -r "$INSTALL_DIR/$path" "$backup_temp/"
+        fi
+    done
+    
+    # Remove old application files (keep preserved paths)
+    find "$INSTALL_DIR" -maxdepth 1 -name "app" -exec rm -rf {} \; 2>/dev/null || true
+    find "$INSTALL_DIR" -maxdepth 1 -name "ops" -exec rm -rf {} \; 2>/dev/null || true
+    find "$INSTALL_DIR" -maxdepth 1 -name "requirements.txt" -delete 2>/dev/null || true
+    find "$INSTALL_DIR" -maxdepth 1 -name "README.md" -delete 2>/dev/null || true
+    find "$INSTALL_DIR" -maxdepth 1 -name "DEPLOYMENT.md" -delete 2>/dev/null || true
+    find "$INSTALL_DIR" -maxdepth 1 -name "SECURITY.md" -delete 2>/dev/null || true
+    
+    # Copy new files from temp directory
+    cp -r "$temp_dir/app" "$INSTALL_DIR/"
+    cp -r "$temp_dir/ops" "$INSTALL_DIR/"
+    cp "$temp_dir/requirements.txt" "$INSTALL_DIR/"
+    [[ -f "$temp_dir/README.md" ]] && cp "$temp_dir/README.md" "$INSTALL_DIR/"
+    [[ -f "$temp_dir/DEPLOYMENT.md" ]] && cp "$temp_dir/DEPLOYMENT.md" "$INSTALL_DIR/"
+    [[ -f "$temp_dir/SECURITY.md" ]] && cp "$temp_dir/SECURITY.md" "$INSTALL_DIR/"
+    
+    # Copy any utility scripts
+    [[ -f "$temp_dir/setup_dev_env.py" ]] && cp "$temp_dir/setup_dev_env.py" "$INSTALL_DIR/"
+    [[ -f "$temp_dir/test_db.py" ]] && cp "$temp_dir/test_db.py" "$INSTALL_DIR/"
+    [[ -f "$temp_dir/test_rclone.py" ]] && cp "$temp_dir/test_rclone.py" "$INSTALL_DIR/"
+    
+    # Restore preserved paths
+    for path in "${preserve_paths[@]}"; do
+        if [[ -e "$backup_temp/$path" ]]; then
+            rm -rf "$INSTALL_DIR/$path" 2>/dev/null || true
+            cp -r "$backup_temp/$path" "$INSTALL_DIR/"
+        fi
+    done
+    
+    # Set proper ownership
+    chown -R "$MASCLONER_USER:$MASCLONER_USER" "$INSTALL_DIR"
+    
+    # Set proper permissions
+    chmod 700 "$INSTALL_DIR/etc"
+    chmod 750 "$INSTALL_DIR/data"
+    chmod 755 "$INSTALL_DIR/logs"
+    chmod 755 "$INSTALL_DIR/ops"
+    
+    # Cleanup
+    rm -rf "$temp_dir" "$backup_temp"
+    
+    echo_success "Code updated successfully"
     cd "$current_dir"
 }
 

@@ -96,7 +96,7 @@ MasCloner is a production-ready admin UI + API system for managing automated one
 
    ```bash
 # Clone and install
-git clone https://github.com/mascloner/mascloner.git
+git clone https://github.com/ali-raaed31/mascloner.git
 cd mascloner
 sudo bash ops/scripts/install.sh
 ```
