@@ -1,0 +1,10 @@
+/.docs/
+/.cursor
+# local env & secrets
+.env
+etc/rclone.conf
+etc/nxg-sync.env
+data/*.db
+logs/
+__pycache__/
+.venv/
