@@ -111,9 +111,9 @@ class APIClient:
         """Estimate sync operation size."""
         return self._make_request("GET", "/estimate/size", params={"source": source, "dest": dest})
     
-    def cleanup_database(self, days: int = 30) -> Optional[Dict[str, Any]]:
+    def cleanup_database(self, keep_runs: int = 100) -> Optional[Dict[str, Any]]:
         """Clean up old database records."""
-        return self._make_request("POST", f"/maintenance/cleanup?days={days}")
+        return self._make_request("POST", "/maintenance/cleanup", params={"keep_runs": keep_runs})
     
     def get_database_info(self) -> Optional[Dict[str, Any]]:
         """Get database information."""

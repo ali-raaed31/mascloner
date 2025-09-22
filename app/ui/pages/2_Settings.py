@@ -258,7 +258,7 @@ with tab2:
     with col2:
         if st.button("🧪 Test Nextcloud", use_container_width=True):
             with st.spinner("Testing Nextcloud..."):
-                result = api.test_nextcloud()
+                result = api.test_nextcloud("ncwebdav")  # Default remote name
                 if result and result.get("success"):
                     st.success("✅ Nextcloud connection OK")
                 else:

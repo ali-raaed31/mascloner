@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.orm import Session
 
 from .db import init_db, get_db, get_db_info
@@ -66,9 +66,13 @@ class FileEventResponse(BaseModel):
 class StatusResponse(BaseModel):
     """Response model for system status."""
     last_run: Optional[Dict[str, Any]] = None
+    last_sync: Optional[str] = None
     next_run: Optional[str] = None
     scheduler_running: bool
     database_ok: bool
+    total_runs: int = 0
+    config_valid: bool = False
+    remotes_configured: Dict[str, bool] = {}
 
 
 class ApiResponse(BaseModel):
@@ -376,6 +380,7 @@ async def get_status(db: Session = Depends(get_db)):
         ).scalars().first()
         
         last_run = None
+        last_sync = None
         if last_run_record:
             last_run = {
                 "id": last_run_record.id,
@@ -387,6 +392,12 @@ async def get_status(db: Session = Depends(get_db)):
                 "bytes_transferred": last_run_record.bytes_transferred,
                 "errors": last_run_record.errors,
             }
+            last_sync = last_run_record.started_at.isoformat()
+        
+        # Get total runs count
+        total_runs_count = db.execute(
+            select(func.count(Run.id))
+        ).scalar() or 0
         
         # Get next run time
         scheduler = get_scheduler()
@@ -397,11 +408,48 @@ async def get_status(db: Session = Depends(get_db)):
         db_info = get_db_info()
         database_ok = db_info.get("connection_ok", False)
         
+        # Check remote configurations
+        remotes_configured = {"gdrive": False, "nextcloud": False}
+        
+        try:
+            base_config = config.get_base_config()
+            rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+            
+            # Check rclone remotes
+            result = subprocess.run([
+                "rclone", "--config", rclone_config,
+                "listremotes"
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                remotes_list = result.stdout.strip()
+                remotes_configured["gdrive"] = "gdrive:" in remotes_list
+                remotes_configured["nextcloud"] = any(
+                    remote in remotes_list for remote in ["ncwebdav:", "nextcloud:", "nc:"]
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check rclone remotes: {e}")
+        
+        # Check configuration validity
+        sync_config = config.get_sync_config()
+        config_valid = bool(
+            sync_config.get("gdrive_remote") and 
+            sync_config.get("gdrive_src") and 
+            sync_config.get("nc_remote") and 
+            sync_config.get("nc_dest_path") and
+            remotes_configured["gdrive"] and 
+            remotes_configured["nextcloud"]
+        )
+        
         return StatusResponse(
             last_run=last_run,
+            last_sync=last_sync,
             next_run=next_run,
             scheduler_running=scheduler.scheduler.running,
-            database_ok=database_ok
+            database_ok=database_ok,
+            total_runs=total_runs_count,
+            config_valid=config_valid,
+            remotes_configured=remotes_configured
         )
         
     except Exception as e:
@@ -641,6 +689,44 @@ async def cleanup_database(keep_runs: int = 100, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database cleanup failed: {str(e)}"
+        )
+
+
+@app.post("/maintenance/reset", response_model=ApiResponse)
+async def reset_database(db: Session = Depends(get_db)):
+    """Reset database by deleting all runs and file events."""
+    try:
+        # Count existing records before deletion
+        runs_count = db.execute(select(func.count(Run.id))).scalar() or 0
+        events_count = db.execute(select(func.count(FileEvent.id))).scalar() or 0
+        
+        # Delete all file events first (due to foreign key constraint)
+        db.execute(select(FileEvent).delete())
+        
+        # Delete all runs
+        db.execute(select(Run).delete())
+        
+        # Commit the changes
+        db.commit()
+        
+        logger.info(f"Database reset: deleted {runs_count} runs and {events_count} file events")
+        
+        return ApiResponse(
+            success=True,
+            message=f"Database reset successfully. Deleted {runs_count} runs and {events_count} file events.",
+            data={
+                "runs_deleted": runs_count,
+                "events_deleted": events_count,
+                "total_deleted": runs_count + events_count
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Database reset failed: {e}")
+        db.rollback()  # Rollback on error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database reset failed: {str(e)}"
         )
 
 
