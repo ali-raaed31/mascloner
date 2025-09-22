@@ -5,8 +5,8 @@ set -euo pipefail
 # Safely updates MasCloner to the latest version
 
 # Configuration
-INSTALL_DIR="$HOME/mascloner"
-MASCLONER_USER="$USER"
+INSTALL_DIR="/srv/mascloner"
+MASCLONER_USER="mascloner"
 BACKUP_DIR="/var/backups/mascloner"
 GIT_REPO="https://github.com/mascloner/mascloner.git"
 

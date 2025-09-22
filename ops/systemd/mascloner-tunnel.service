@@ -7,12 +7,12 @@ Requires=mascloner-ui.service
 
 [Service]
 Type=exec
-User=MASCLONER_USER
-Group=MASCLONER_USER
-WorkingDirectory=INSTALL_DIR
+User=mascloner
+Group=mascloner
+WorkingDirectory=/srv/mascloner
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-EnvironmentFile=INSTALL_DIR/etc/cloudflare.env
-ExecStart=/usr/local/bin/cloudflared tunnel --config INSTALL_DIR/etc/cloudflare-tunnel.yaml run
+EnvironmentFile=/srv/mascloner/etc/cloudflare.env
+ExecStart=/usr/local/bin/cloudflared tunnel --config /srv/mascloner/etc/cloudflare-tunnel.yaml run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=20
@@ -24,7 +24,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=INSTALL_DIR/etc INSTALL_DIR/logs
+ReadWritePaths=/srv/mascloner/etc /srv/mascloner/logs
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

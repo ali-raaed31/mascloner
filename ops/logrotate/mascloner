@@ -1,37 +1,37 @@
-INSTALL_DIR/logs/*.log {
+/srv/mascloner/logs/*.log {
     daily
     missingok
     rotate 30
     compress
     delaycompress
     notifempty
-    create 644 MASCLONER_USER MASCLONER_USER
+    create 644 mascloner mascloner
     postrotate
-        sudo systemctl reload mascloner-api mascloner-ui 2>/dev/null || true
+        systemctl reload mascloner-api mascloner-ui 2>/dev/null || true
     endscript
 }
 
-INSTALL_DIR/logs/sync-*.log {
+/srv/mascloner/logs/sync-*.log {
     daily
     missingok
     rotate 90
     compress
     delaycompress
     notifempty
-    create 644 MASCLONER_USER MASCLONER_USER
+    create 644 mascloner mascloner
     maxsize 100M
 }
 
 # Cloudflare tunnel logs
-INSTALL_DIR/logs/cloudflared.log {
+/srv/mascloner/logs/cloudflared.log {
     daily
     missingok
     rotate 14
     compress
     delaycompress
     notifempty
-    create 644 MASCLONER_USER MASCLONER_USER
+    create 644 mascloner mascloner
     postrotate
-        sudo systemctl reload mascloner-tunnel 2>/dev/null || true
+        systemctl reload mascloner-tunnel 2>/dev/null || true
     endscript
 }

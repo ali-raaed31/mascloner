@@ -94,7 +94,7 @@ MasCloner is a production-ready admin UI + API system for managing automated one
 
 **🚀 One-command installation:**
 
-```bash
+   ```bash
 # Clone and install
 git clone https://github.com/mascloner/mascloner.git
 cd mascloner
@@ -102,10 +102,10 @@ sudo bash ops/scripts/install.sh
 ```
 
 **The installer automatically handles:**
-- ✅ System dependencies (Python, rclone, cloudflared)
-- ✅ User creation and directory setup  
+- ✅ System dependencies (Python, rclone, cloudflared via official Cloudflare repo)
+- ✅ Dedicated `mascloner` user creation and `/srv/mascloner` setup
 - ✅ Virtual environment and dependencies
-- ✅ SystemD services installation
+- ✅ SystemD services installation and configuration
 - ✅ Database initialization with encryption
 - ✅ Firewall configuration and security hardening
 - ✅ Log rotation setup
@@ -116,7 +116,8 @@ sudo bash ops/scripts/install.sh
 
 1. **📁 Configure Google Drive** (CLI-guided):
    ```bash
-   sudo -u mascloner -i
+   # Use Setup Wizard in UI for guided CLI commands
+   # Or configure manually:
    rclone config create gdrive drive
    # Follow OAuth flow in browser
    rclone lsd gdrive:  # Test connection
@@ -238,6 +239,7 @@ Configure via web UI or API:
 │   │   ├── db.py          # Database setup
 │   │   ├── config.py      # Configuration management
 │   │   ├── scheduler.py   # APScheduler integration
+│   │   ├── tree_builder.py # File tree visualization
 │   │   └── rclone_runner.py # rclone execution
 │   └── ui/                # Streamlit frontend
 │       ├── streamlit_app.py
@@ -260,9 +262,9 @@ Configure via web UI or API:
 sudo systemctl status mascloner-api mascloner-ui mascloner-tunnel
 
 # View real-time logs
-sudo journalctl -f -u mascloner-api
-sudo journalctl -f -u mascloner-ui  
-sudo journalctl -f -u mascloner-tunnel
+journalctl -f -u mascloner-api
+journalctl -f -u mascloner-ui  
+journalctl -f -u mascloner-tunnel
 
 # Restart services
 sudo systemctl restart mascloner-api mascloner-ui

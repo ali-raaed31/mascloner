@@ -5,7 +5,7 @@ set -euo pipefail
 # Creates backups of database, configuration, and logs
 
 # Configuration
-INSTALL_DIR="$HOME/mascloner"
+INSTALL_DIR="/srv/mascloner"
 BACKUP_DIR="/var/backups/mascloner"
 RETENTION_DAYS=30
 DATE=$(date +%Y%m%d_%H%M%S)

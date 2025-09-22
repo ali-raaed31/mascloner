@@ -2,7 +2,7 @@
 # This file will be customized during installation
 
 tunnel: ${TUNNEL_ID}
-credentials-file: INSTALL_DIR/etc/cloudflare-credentials.json
+credentials-file: /srv/mascloner/etc/cloudflare-credentials.json
 
 # Ingress rules
 ingress:
@@ -38,7 +38,7 @@ originRequest:
 
 # Logging
 loglevel: info
-logfile: INSTALL_DIR/logs/cloudflare-tunnel.log
+logfile: /srv/mascloner/logs/cloudflare-tunnel.log
 
 # Metrics (optional)
 metrics: 127.0.0.1:8080

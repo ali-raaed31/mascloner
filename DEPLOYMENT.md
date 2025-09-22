@@ -18,6 +18,10 @@ This guide covers deploying MasCloner in production with Cloudflare Tunnel and Z
 
 ## Quick Installation
 
+**🚀 Production-Grade Installation**
+
+The installation uses Linux best practices with a dedicated `mascloner` system user and `/srv/mascloner` directory structure for maximum security and maintainability.
+
 ### 1. Download and Run Installer
 
 ```bash
@@ -30,13 +34,14 @@ sudo bash ops/scripts/install.sh
 ```
 
 The installer will:
-- ✅ Install system dependencies (Python, rclone, cloudflared)
-- ✅ Create `mascloner` user and directories
-- ✅ Set up Python virtual environment
-- ✅ Configure SystemD services
-- ✅ Initialize database and encryption
-- ✅ Configure firewall and security
-- ✅ Start services
+- ✅ Install system dependencies (Python, rclone, cloudflared via official repo)
+- ✅ Create dedicated `mascloner` user and `/srv/mascloner` directory structure
+- ✅ Copy application files from source to production location
+- ✅ Set up Python virtual environment with proper permissions
+- ✅ Configure SystemD services for production deployment
+- ✅ Initialize database and encryption with secure permissions
+- ✅ Configure firewall and security hardening
+- ✅ Start services and enable auto-start
 
 ### 2. Configure Remote Access
 
@@ -80,7 +85,7 @@ rclone lsd ncwebdav:
 
 ```bash
 # Run Cloudflare setup script
-sudo bash ops/scripts/setup-cloudflare-tunnel.sh
+sudo bash /srv/mascloner/ops/scripts/setup-cloudflare-tunnel.sh
 ```
 
 This will:
@@ -97,11 +102,11 @@ Three services are installed:
 
 ```bash
 # Core services
-systemctl status mascloner-api    # FastAPI backend
-systemctl status mascloner-ui     # Streamlit frontend
+sudo systemctl status mascloner-api    # FastAPI backend
+sudo systemctl status mascloner-ui     # Streamlit frontend
 
 # Optional tunnel service
-systemctl status mascloner-tunnel # Cloudflare Tunnel
+sudo systemctl status mascloner-tunnel # Cloudflare Tunnel
 ```
 
 ### Configuration Files
@@ -199,12 +204,12 @@ sudo ufw deny 8501/tcp  # UI
 Critical security permissions:
 ```bash
 # Environment files (600 = owner read/write only)
--rw------- 1 mascloner mascloner .env
--rw------- 1 mascloner mascloner etc/cloudflare.env
--rw------- 1 mascloner mascloner etc/cloudflare-credentials.json
+-rw------- 1 $USER $USER .env
+-rw------- 1 $USER $USER etc/cloudflare.env
+-rw------- 1 $USER $USER etc/cloudflare-credentials.json
 
 # Directories (700 = owner access only)
-drwx------ 2 mascloner mascloner etc/
+drwx------ 2 $USER $USER etc/
 ```
 
 ### Encryption
@@ -219,10 +224,10 @@ drwx------ 2 mascloner mascloner etc/
 
 ```bash
 # Check system health
-sudo bash /srv/mascloner/ops/scripts/health-check.sh
+bash ~/mascloner/ops/scripts/health-check.sh
 
 # View service status
-systemctl status mascloner-api mascloner-ui mascloner-tunnel
+sudo systemctl status mascloner-api mascloner-ui mascloner-tunnel
 
 # View logs
 journalctl -f -u mascloner-api
@@ -233,14 +238,14 @@ journalctl -f -u mascloner-ui
 
 ```bash
 # Create backup
-sudo bash /srv/mascloner/ops/scripts/backup.sh
+bash ~/mascloner/ops/scripts/backup.sh
 
 # Backups stored in
 ls -la /var/backups/mascloner/
 
 # Manual restore (if needed)
 sudo systemctl stop mascloner-api mascloner-ui
-sudo tar -xzf /var/backups/mascloner/backup.tar.gz -C /srv/mascloner/
+tar -xzf /var/backups/mascloner/backup.tar.gz -C ~/mascloner/
 sudo systemctl start mascloner-api mascloner-ui
 ```
 
@@ -248,7 +253,7 @@ sudo systemctl start mascloner-api mascloner-ui
 
 ```bash
 # Update MasCloner
-sudo bash /srv/mascloner/ops/scripts/update.sh
+bash ~/mascloner/ops/scripts/update.sh
 
 # This will:
 # - Create backup
@@ -274,7 +279,7 @@ journalctl -f -u mascloner-ui
 journalctl -f -u mascloner-tunnel
 
 # Historical logs
-ls /srv/mascloner/logs/
+ls ~/mascloner/logs/
 ```
 
 ## Troubleshooting
@@ -284,13 +289,13 @@ ls /srv/mascloner/logs/
 #### Service Won't Start
 ```bash
 # Check service status
-systemctl status mascloner-api
+sudo systemctl status mascloner-api
 
 # View detailed logs
 journalctl -u mascloner-api --no-pager -l
 
 # Check permissions
-sudo -u mascloner ls -la /srv/mascloner/
+ls -la ~/mascloner/
 ```
 
 #### Fernet Key Error
@@ -299,7 +304,7 @@ sudo -u mascloner ls -la /srv/mascloner/
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # Update .env file
-sudo nano /srv/mascloner/.env
+nano ~/mascloner/.env
 # Set MASCLONER_FERNET_KEY=<new-key>
 
 # Restart services
@@ -309,7 +314,7 @@ sudo systemctl restart mascloner-api mascloner-ui
 #### Cloudflare Tunnel Issues
 ```bash
 # Check tunnel status
-systemctl status mascloner-tunnel
+sudo systemctl status mascloner-tunnel
 
 # Test tunnel connectivity
 curl -I https://mascloner.yourdomain.com
@@ -324,15 +329,15 @@ sudo systemctl restart mascloner-tunnel
 #### Database Issues
 ```bash
 # Check database integrity
-sudo -u mascloner sqlite3 /srv/mascloner/data/mascloner.db "PRAGMA integrity_check;"
+sqlite3 ~/mascloner/data/mascloner.db "PRAGMA integrity_check;"
 
 # View database info
-sudo -u mascloner sqlite3 /srv/mascloner/data/mascloner.db ".tables"
+sqlite3 ~/mascloner/data/mascloner.db ".tables"
 ```
 
 ### Getting Help
 
-1. **Health Check**: Run `sudo bash /srv/mascloner/ops/scripts/health-check.sh`
+1. **Health Check**: Run `bash ~/mascloner/ops/scripts/health-check.sh`
 2. **Logs**: Check systemd logs for error details
 3. **Documentation**: Review this guide and README.md
 4. **Issues**: Report issues on GitHub with logs and system info
@@ -345,7 +350,7 @@ For large-scale deployments:
 
 ```bash
 # Increase rclone performance
-# Edit /srv/mascloner/.env
+# Edit ~/mascloner/.env
 RCLONE_TRANSFERS=8
 RCLONE_CHECKERS=16
 RCLONE_TPSLIMIT=20
@@ -362,13 +367,13 @@ Monitor resource usage:
 htop
 
 # Disk usage
-df -h /srv/mascloner
+df -h ~/mascloner
 
 # Database size
-du -sh /srv/mascloner/data/mascloner.db
+du -sh ~/mascloner/data/mascloner.db
 
 # Log size
-du -sh /srv/mascloner/logs/
+du -sh ~/mascloner/logs/
 ```
 
 ## Advanced Configuration
@@ -377,7 +382,7 @@ du -sh /srv/mascloner/logs/
 
 To use custom domains:
 1. Add domain to Cloudflare
-2. Update tunnel configuration in `/srv/mascloner/etc/cloudflare-tunnel.yaml`
+2. Update tunnel configuration in `~/mascloner/etc/cloudflare-tunnel.yaml`
 3. Restart tunnel: `sudo systemctl restart mascloner-tunnel`
 
 ### Multiple Sync Sources
@@ -392,7 +397,7 @@ To sync multiple Google Drive folders:
 For monitoring systems (Prometheus, etc.):
 - **Health endpoint**: `http://127.0.0.1:8787/health`
 - **Metrics endpoint**: `http://127.0.0.1:8787/status`
-- **Log files**: `/srv/mascloner/logs/`
+- **Log files**: `~/mascloner/logs/`
 
 ## Production Checklist
 
@@ -410,8 +415,8 @@ Before going live:
 
 ## Support
 
-- **Documentation**: `/srv/mascloner/README.md`
-- **Health Check**: `/srv/mascloner/ops/scripts/health-check.sh`
+- **Documentation**: `~/mascloner/README.md`
+- **Health Check**: `~/mascloner/ops/scripts/health-check.sh`
 - **GitHub Issues**: Report problems with logs and system details
 - **Cloudflare Docs**: [Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/)
 

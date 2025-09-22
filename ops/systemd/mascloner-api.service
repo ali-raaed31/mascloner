@@ -6,13 +6,13 @@ Wants=network.target
 
 [Service]
 Type=exec
-User=MASCLONER_USER
-Group=MASCLONER_USER
-WorkingDirectory=INSTALL_DIR
-Environment=PATH=INSTALL_DIR/.venv/bin:/usr/local/bin:/usr/bin:/bin
-Environment=PYTHONPATH=INSTALL_DIR
-EnvironmentFile=INSTALL_DIR/.env
-ExecStart=INSTALL_DIR/.venv/bin/python -m app.api.main
+User=mascloner
+Group=mascloner
+WorkingDirectory=/srv/mascloner
+Environment=PATH=/srv/mascloner/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/srv/mascloner
+EnvironmentFile=/srv/mascloner/.env
+ExecStart=/srv/mascloner/.venv/bin/python -m app.api.main
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -24,7 +24,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=INSTALL_DIR/data INSTALL_DIR/logs INSTALL_DIR/etc
+ReadWritePaths=/srv/mascloner/data /srv/mascloner/logs /srv/mascloner/etc
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

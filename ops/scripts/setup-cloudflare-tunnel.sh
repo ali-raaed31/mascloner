@@ -11,9 +11,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration - Fixed to ~/mascloner
-INSTALL_DIR="$HOME/mascloner"
-MASCLONER_USER="$USER"
+# Configuration - Production standard paths
+INSTALL_DIR="/srv/mascloner"
+MASCLONER_USER="mascloner"
 
 echo -e "${BLUE}[INFO]${NC} Using installation directory: $INSTALL_DIR"
 echo -e "${BLUE}[INFO]${NC} Using user: $MASCLONER_USER"

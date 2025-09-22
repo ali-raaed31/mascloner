@@ -7,13 +7,13 @@ Requires=mascloner-api.service
 
 [Service]
 Type=exec
-User=MASCLONER_USER
-Group=MASCLONER_USER
-WorkingDirectory=INSTALL_DIR
-Environment=PATH=INSTALL_DIR/.venv/bin:/usr/local/bin:/usr/bin:/bin
-Environment=PYTHONPATH=INSTALL_DIR
-EnvironmentFile=INSTALL_DIR/.env
-ExecStart=INSTALL_DIR/.venv/bin/streamlit run app/ui/streamlit_app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+User=mascloner
+Group=mascloner
+WorkingDirectory=/srv/mascloner
+Environment=PATH=/srv/mascloner/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/srv/mascloner
+EnvironmentFile=/srv/mascloner/.env
+ExecStart=/srv/mascloner/.venv/bin/streamlit run app/ui/streamlit_app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=15
@@ -25,7 +25,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=INSTALL_DIR/data INSTALL_DIR/logs INSTALL_DIR/etc
+ReadWritePaths=/srv/mascloner/data /srv/mascloner/logs /srv/mascloner/etc
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

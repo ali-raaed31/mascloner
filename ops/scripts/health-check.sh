@@ -5,7 +5,7 @@ set -euo pipefail
 # Comprehensive system health monitoring
 
 # Configuration
-INSTALL_DIR="$HOME/mascloner"
+INSTALL_DIR="/srv/mascloner"
 API_URL="http://127.0.0.1:8787"
 UI_URL="http://127.0.0.1:8501"
 

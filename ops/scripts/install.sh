@@ -11,10 +11,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-MASCLONER_USER="$USER"
-MASCLONER_GROUP="$USER"
-INSTALL_DIR="$HOME/mascloner"
+# Configuration - Production standard paths
+INSTALL_DIR="/srv/mascloner"
+MASCLONER_USER="mascloner"
+MASCLONER_GROUP="mascloner"
+INSTALL_USER="${SUDO_USER:-$USER}"
 PYTHON_VERSION="3.11"
 
 # Logging
@@ -71,7 +72,7 @@ install_system_packages() {
     apt install -y \
         python3 python3-venv python3-pip python3-dev \
         curl wget gnupg lsb-release ca-certificates \
-        git build-essential \
+        git build-essential unzip \
         systemd logrotate \
         ufw fail2ban \
         htop nano vim \
@@ -135,38 +136,53 @@ install_cloudflared() {
 }
 
 create_user() {
-    echo_info "Configuring user environment..."
+    echo_info "Creating mascloner system user..."
     
-    # Since we're using the current user, just verify they exist
-    echo_info "Using current user: $MASCLONER_USER"
-    echo_info "User home directory: $HOME"
-    
-    if ! id "$MASCLONER_USER" &>/dev/null; then
-        echo_error "Current user $MASCLONER_USER doesn't exist (this shouldn't happen)"
-        exit 1
+    # Check if user already exists
+    if id "$MASCLONER_USER" &>/dev/null; then
+        echo_warning "User $MASCLONER_USER already exists"
+    else
+        # Create system user with home directory at install location
+        useradd -r -s /bin/bash -d "$INSTALL_DIR" -c "MasCloner Service User" "$MASCLONER_USER"
+        echo_success "User $MASCLONER_USER created"
     fi
     
-    # Ensure user group exists (it should already)
+    # Ensure group exists and user is in it
     if ! getent group "$MASCLONER_GROUP" >/dev/null 2>&1; then
-        echo_warning "Group $MASCLONER_GROUP doesn't exist, this is unusual"
+        groupadd "$MASCLONER_GROUP"
     fi
+    usermod -a -G "$MASCLONER_GROUP" "$MASCLONER_USER"
     
-    echo_success "User configuration verified"
+    echo_success "User $MASCLONER_USER configured"
 }
 
 setup_directories() {
     echo_info "Setting up directories..."
     
-    # Create main directory structure
-    mkdir -p "$INSTALL_DIR"/{data,logs,etc,ops}
+    # Get the source directory (where we're running from)
+    SOURCE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+    echo_info "Source directory: $SOURCE_DIR"
+    echo_info "Target directory: $INSTALL_DIR"
     
-    # Copy application files
-    if [[ -d "$(dirname "$0")/../../app" ]]; then
-        cp -r "$(dirname "$0")/../../app" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/../../requirements.txt" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/../../README.md" "$INSTALL_DIR/" 2>/dev/null || true
+    # Create main directory structure
+    mkdir -p "$INSTALL_DIR"/{data,logs,etc}
+    
+    # Copy entire application to target location
+    echo_info "Copying application files..."
+    if [[ -d "$SOURCE_DIR/app" ]]; then
+        cp -r "$SOURCE_DIR/app" "$INSTALL_DIR/"
+        cp -r "$SOURCE_DIR/ops" "$INSTALL_DIR/"
+        cp "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/"
+        cp "$SOURCE_DIR/README.md" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SOURCE_DIR/DEPLOYMENT.md" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SOURCE_DIR/SECURITY.md" "$INSTALL_DIR/" 2>/dev/null || true
+        
+        # Copy utility scripts if they exist
+        [[ -f "$SOURCE_DIR/setup_dev_env.py" ]] && cp "$SOURCE_DIR/setup_dev_env.py" "$INSTALL_DIR/"
+        [[ -f "$SOURCE_DIR/test_db.py" ]] && cp "$SOURCE_DIR/test_db.py" "$INSTALL_DIR/"
+        [[ -f "$SOURCE_DIR/test_rclone.py" ]] && cp "$SOURCE_DIR/test_rclone.py" "$INSTALL_DIR/"
     else
-        echo_error "Cannot find MasCloner application files"
+        echo_error "Cannot find MasCloner application files at $SOURCE_DIR"
         echo_error "Please run this script from the MasCloner repository"
         exit 1
     fi
@@ -175,10 +191,11 @@ setup_directories() {
     chown -R "$MASCLONER_USER:$MASCLONER_GROUP" "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR"
     chmod 700 "$INSTALL_DIR/etc"  # Sensitive config files
-    chmod 755 "$INSTALL_DIR/logs"
-    chmod 755 "$INSTALL_DIR/data"
+    chmod 750 "$INSTALL_DIR/data" # Database directory
+    chmod 755 "$INSTALL_DIR/logs" # Log directory
+    chmod 755 "$INSTALL_DIR/ops"  # Operations scripts
     
-    echo_success "Directory structure created"
+    echo_success "Directory structure created and files copied"
 }
 
 setup_python_environment() {
@@ -255,29 +272,32 @@ EOF
     chown "$MASCLONER_USER:$MASCLONER_GROUP" "$INSTALL_DIR/.env"
     chmod 600 "$INSTALL_DIR/.env"
     
+    # Verify the file was created correctly
+    if [[ -f "$INSTALL_DIR/.env" ]]; then
+        echo_info "Environment file created at: $INSTALL_DIR/.env"
+        echo_info "File size: $(wc -c < "$INSTALL_DIR/.env") bytes"
+        echo_info "Sample content check:"
+        head -3 "$INSTALL_DIR/.env" | grep -E "^(MASCLONER_BASE_DIR|MASCLONER_FERNET_KEY)" || echo_warning "Key variables not found in .env file"
+    else
+        echo_error "Failed to create environment file"
+        exit 1
+    fi
+    
     echo_success "Environment file created"
 }
 
 install_systemd_services() {
     echo_info "Installing SystemD services..."
     
-    # Process and copy service files with variable substitution
-    for service_file in "$(dirname "$0")/../systemd/"*.service; do
-        service_name=$(basename "$service_file")
-        echo_info "Installing service: $service_name"
-        
-        # Substitute template variables
-        sed -e "s|INSTALL_DIR|$INSTALL_DIR|g" \
-            -e "s|MASCLONER_USER|$MASCLONER_USER|g" \
-            "$service_file" > "/etc/systemd/system/$service_name"
-    done
+    # Copy service files directly (no substitution needed)
+    cp "$INSTALL_DIR/ops/systemd/"*.service /etc/systemd/system/
     
     # Reload systemd
-    sudo systemctl daemon-reload
+    systemctl daemon-reload
     
     # Enable services
-    sudo systemctl enable mascloner-api.service
-    sudo systemctl enable mascloner-ui.service
+    systemctl enable mascloner-api.service
+    systemctl enable mascloner-ui.service
     
     echo_success "SystemD services installed and enabled"
 }
@@ -285,10 +305,8 @@ install_systemd_services() {
 setup_logrotate() {
     echo_info "Setting up log rotation..."
     
-    # Process logrotate configuration with variable substitution
-    sed -e "s|INSTALL_DIR|$INSTALL_DIR|g" \
-        -e "s|MASCLONER_USER|$MASCLONER_USER|g" \
-        "$(dirname "$0")/../logrotate/mascloner" > /etc/logrotate.d/mascloner
+    # Copy logrotate configuration directly (no substitution needed)
+    cp "$INSTALL_DIR/ops/logrotate/mascloner" /etc/logrotate.d/mascloner
     
     # Test logrotate configuration
     logrotate -d /etc/logrotate.d/mascloner
@@ -322,13 +340,17 @@ initialize_database() {
     echo_info "Initializing database..."
     
     # Initialize database as mascloner user
-    sudo -u "$MASCLONER_USER" -E "$INSTALL_DIR/.venv/bin/python" -c "
+    sudo -u "$MASCLONER_USER" bash -c "
+        cd '$INSTALL_DIR'
+        export PYTHONPATH='$INSTALL_DIR'
+        '$INSTALL_DIR/.venv/bin/python' -c \"
 import sys
 sys.path.append('$INSTALL_DIR')
 from app.api.db import init_db
 init_db()
 print('Database initialized successfully')
-"
+\"
+    "
     
     echo_success "Database initialized"
 }
