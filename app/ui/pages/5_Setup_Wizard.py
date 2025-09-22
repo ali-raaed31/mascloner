@@ -537,43 +537,30 @@ Checkers: {setup_data.get('checkers', 8)}
             sync_result = api.update_config(sync_config)
             
             if sync_result and sync_result.get("success"):
-                # Save performance configuration
-                perf_config = {
-                    "sync_interval_min": setup_data.get("sync_interval_min"),
-                    "sync_jitter_sec": setup_data.get("sync_jitter_sec"),
-                    "transfers": setup_data.get("transfers"),
-                    "checkers": setup_data.get("checkers")
-                }
+                # Skip performance config for now - start scheduler directly
+                scheduler_result = api.start_scheduler()
                 
-                perf_result = api.update_config(perf_config)
-                
-                if perf_result and perf_result.get("success"):
-                    # Start scheduler
-                    scheduler_result = api.start_scheduler()
+                if scheduler_result:
+                    st.success("🎉 Setup completed successfully!")
+                    st.balloons()
                     
-                    if scheduler_result:
-                        st.success("🎉 Setup completed successfully!")
-                        st.balloons()
-                        
-                        st.markdown("""
-                        **✅ MasCloner is now configured and running!**
-                        
-                        What happens next:
-                        - Sync scheduler is active and will run every {interval} minutes
-                        - Files will be automatically synced from Google Drive to Nextcloud
-                        - Check the Dashboard for sync status and history
-                        - Visit Settings to modify configuration anytime
-                        """.format(interval=setup_data.get("sync_interval_min", 5)))
-                        
-                        # Reset wizard
-                        if st.button("🏠 Go to Dashboard"):
-                            st.session_state.setup_step = 1
-                            st.session_state.setup_data = {}
-                            st.switch_page("streamlit_app.py")
-                    else:
-                        st.error("❌ Failed to start scheduler")
+                    st.markdown("""
+                    **✅ MasCloner is now configured and running!**
+                    
+                    What happens next:
+                    - Sync scheduler is active and will run every 5 minutes
+                    - Files will be automatically synced from Google Drive to Nextcloud
+                    - Check the Dashboard for sync status and history
+                    - Visit Settings to modify configuration anytime
+                    """)
+                    
+                    # Reset wizard
+                    if st.button("🏠 Go to Dashboard"):
+                        st.session_state.setup_step = 1
+                        st.session_state.setup_data = {}
+                        st.switch_page("streamlit_app.py")
                 else:
-                    st.error("❌ Failed to save performance configuration")
+                    st.error("❌ Failed to start scheduler")
             else:
                 st.error("❌ Failed to save sync configuration")
     
