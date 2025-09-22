@@ -174,18 +174,60 @@ login_to_cloudflare() {
         echo_info "If you're on a headless server, copy the URL to your local browser."
         echo
         
-        if cloudflared tunnel login; then
-            echo_success "Cloudflare authentication successful!"
+        # Run cloudflared login with proper error handling
+        echo_info "Running: cloudflared tunnel login"
+        if cloudflared tunnel login 2>&1 | tee /tmp/cloudflared-login.log; then
+            echo_success "Cloudflare login command completed"
+            
+            # Give time for file system sync
+            sleep 2
             
             # Verify certificate was created
             if [[ -f ~/.cloudflared/cert.pem ]]; then
                 echo_success "Origin certificate found: ~/.cloudflared/cert.pem"
-                return 0
+                
+                # Test the certificate works
+                if cloudflared tunnel list >/dev/null 2>&1; then
+                    echo_success "Certificate is working - can list tunnels"
+                    return 0
+                else
+                    echo_warning "Certificate exists but tunnel list failed"
+                    echo_info "This may be normal if no tunnels exist yet"
+                    return 0
+                fi
             else
-                echo_warning "Authentication succeeded but certificate not found"
+                echo_warning "Authentication command succeeded but certificate not found"
+                echo_info "Login output:"
+                cat /tmp/cloudflared-login.log 2>/dev/null || echo "No log available"
+                echo_warning "Possible issues:"
+                echo "• Browser authentication may have been incomplete"
+                echo "• Network connectivity problems"
+                echo "• Certificate saved to different location"
+                
+                # Check alternative certificate locations
+                local cert_locations=(
+                    "$HOME/.cloudflared/cert.pem"
+                    "/root/.cloudflared/cert.pem"
+                    "~/.cloudflare-warp/cert.pem"
+                    "/etc/cloudflared/cert.pem"
+                )
+                
+                echo_info "Checking alternative certificate locations..."
+                for location in "${cert_locations[@]}"; do
+                    if [[ -f "$location" ]]; then
+                        echo_success "Found certificate at: $location"
+                        # Copy to expected location
+                        mkdir -p ~/.cloudflared
+                        cp "$location" ~/.cloudflared/cert.pem
+                        echo_success "Certificate copied to ~/.cloudflared/cert.pem"
+                        return 0
+                    fi
+                done
             fi
         else
-            echo_error "Cloudflare authentication failed"
+            echo_error "Cloudflare authentication command failed"
+            echo_info "Login output:"
+            cat /tmp/cloudflared-login.log 2>/dev/null || echo "No log available"
         fi
         
         if [[ $attempt -lt $max_attempts ]]; then
@@ -273,13 +315,16 @@ collect_configuration() {
     while [[ "$token_validated" == false && $token_attempt -le $max_token_attempts ]]; do
         echo
         echo_info "=== CLOUDFLARE API TOKEN (Attempt $token_attempt/$max_token_attempts) ==="
-        echo_warning "Create an API token with these permissions:"
-        echo "• Zone:Edit (for DNS records)"
-        echo "• Zone:Read (for zone verification)"
-        echo "• Account:Read (for tunnel management)"
+        echo_warning "Create an API token with these EXACT permissions:"
+        echo "• Account:Cloudflare Tunnel:Edit"
+        echo "• Zone:DNS:Edit"  
+        echo "• Zone:DNS:Read"
         echo
         echo_info "Create at: https://dash.cloudflare.com/profile/api-tokens"
-        echo_info "Use the 'Custom token' option for precise permissions"
+        echo_info "Use the 'Custom token' option and select:"
+        echo_info "  1. Account permissions: Cloudflare Tunnel = Edit"
+        echo_info "  2. Zone permissions: DNS = Edit"
+        echo_info "  3. Zone permissions: DNS = Read"
         read -s -p "Enter Cloudflare API Token: " CF_API_TOKEN
         echo
         
@@ -333,39 +378,127 @@ collect_configuration() {
         fi
     done
     
-    # Zone ID with auto-detection
-    echo
-    echo_info "=== CLOUDFLARE ZONE ==="
-    echo_info "Fetching zones for your account..."
-    ZONES_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json")
+    # Zone ID with auto-detection and improved error handling
+    local zone_configured=false
+    local max_zone_attempts=2
+    local zone_attempt=1
     
-    if echo "$ZONES_RESPONSE" | grep -q '"success":true'; then
-        echo_success "Zones fetched successfully"
+    while [[ "$zone_configured" == false && $zone_attempt -le $max_zone_attempts ]]; do
+        echo
+        echo_info "=== CLOUDFLARE ZONE (Attempt $zone_attempt/$max_zone_attempts) ==="
+        echo_info "Fetching zones for your account..."
         
-        # Try to auto-detect zone ID
-        AUTO_ZONE_ID=$(echo "$ZONES_RESPONSE" | grep -o '"id":"[^"]*"' | grep -A1 "\"name\":\"$DOMAIN\"" | grep '"id"' | cut -d'"' -f4)
+        local zones_response
+        zones_response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -w "\nHTTP_CODE:%{http_code}")
         
-        if [[ -n "$AUTO_ZONE_ID" ]]; then
-            echo_info "Auto-detected Zone ID for $DOMAIN: $AUTO_ZONE_ID"
-            read -p "Use this Zone ID? (Y/n): " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Nn]$ ]]; then
-                read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+        local http_code=$(echo "$zones_response" | tail -n1 | sed 's/HTTP_CODE://')
+        local json_response=$(echo "$zones_response" | sed '$d')
+        
+        echo_info "HTTP Status: $http_code"
+        
+        if [[ "$http_code" == "200" ]]; then
+            if echo "$json_response" | grep -q '"success":true'; then
+                echo_success "Zones fetched successfully"
+                
+                # Extract available zones for display
+                local zone_names=$(echo "$json_response" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+                
+                if [[ -n "$zone_names" ]]; then
+                    echo_info "Available zones in your account:"
+                    echo "$zone_names" | sed 's/^/  • /'
+                    echo
+                    
+                    # Try to auto-detect zone ID for the specified domain
+                    local auto_zone_id
+                    # Use jq-like parsing for better JSON handling
+                    auto_zone_id=$(echo "$json_response" | grep -A2 -B2 "\"name\":\"$DOMAIN\"" | grep '"id":' | head -1 | cut -d'"' -f4)
+                    
+                    if [[ -n "$auto_zone_id" ]]; then
+                        echo_success "Auto-detected Zone ID for $DOMAIN: $auto_zone_id"
+                        read -p "Use this Zone ID? (Y/n): " -n 1 -r
+                        echo
+                        if [[ $REPLY =~ ^[Nn]$ ]]; then
+                            read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+                        else
+                            CF_ZONE_ID="$auto_zone_id"
+                        fi
+                        zone_configured=true
+                    else
+                        echo_warning "Could not auto-detect Zone ID for domain: $DOMAIN"
+                        echo_info "Please verify that:"
+                        echo "  • Domain '$DOMAIN' is added to your Cloudflare account"
+                        echo "  • Domain nameservers are pointing to Cloudflare"
+                        echo "  • Your API token has access to this zone"
+                        echo
+                        
+                        if echo "$zone_names" | grep -q "$DOMAIN"; then
+                            echo_warning "Domain found but Zone ID extraction failed"
+                        else
+                            echo_warning "Domain '$DOMAIN' not found in your account"
+                        fi
+                        
+                        read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+                        if [[ -n "$CF_ZONE_ID" ]]; then
+                            zone_configured=true
+                        fi
+                    fi
+                else
+                    echo_error "No zones found in your account"
+                    echo_info "Please ensure:"
+                    echo "  • You have domains added to Cloudflare"
+                    echo "  • API token has Zone:Read permissions"
+                    read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+                    if [[ -n "$CF_ZONE_ID" ]]; then
+                        zone_configured=true
+                    fi
+                fi
             else
-                CF_ZONE_ID="$AUTO_ZONE_ID"
+                echo_error "API request failed"
+                echo_info "Response: $json_response"
+                local error_message=$(echo "$json_response" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
+                [[ -n "$error_message" ]] && echo_error "Error: $error_message"
             fi
+        elif [[ "$http_code" == "403" ]]; then
+            echo_error "Access denied (HTTP 403)"
+            echo_warning "Your API token may lack Zone:Read permissions"
+            echo_info "Required token permissions:"
+            echo "  • Account:Cloudflare Tunnel:Edit"
+            echo "  • Zone:DNS:Edit"
+            echo "  • Zone:DNS:Read"
+        elif [[ "$http_code" == "401" ]]; then
+            echo_error "Authentication failed (HTTP 401)"
+            echo_warning "Your API token may be invalid or expired"
         else
-            echo_warning "Could not auto-detect Zone ID for $DOMAIN"
-            echo_info "Available zones:"
-            echo "$ZONES_RESPONSE" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | sed 's/^/  • /'
-            read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+            echo_error "HTTP request failed with status: $http_code"
+            echo_info "Response: $json_response"
         fi
-    else
-        echo_warning "Could not fetch zones (API token may lack permissions)"
-        read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
-    fi
+        
+        if [[ "$zone_configured" == false ]]; then
+            if [[ $zone_attempt -lt $max_zone_attempts ]]; then
+                echo_warning "Zone configuration failed"
+                read -p "Try again with manual Zone ID entry? (y/N): " -n 1 -r
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    read -p "Enter Cloudflare Zone ID manually: " CF_ZONE_ID
+                    if [[ -n "$CF_ZONE_ID" ]]; then
+                        zone_configured=true
+                    else
+                        ((zone_attempt++))
+                    fi
+                else
+                    echo_error "Zone configuration is required to continue"
+                    exit 1
+                fi
+            else
+                echo_error "Failed to configure zone after $max_zone_attempts attempts"
+                echo_info "Please verify your API token permissions and domain setup"
+                exit 1
+            fi
+        fi
+    done
     
     # Zero Trust team name
     echo
