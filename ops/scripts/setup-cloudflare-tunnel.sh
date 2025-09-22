@@ -11,18 +11,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration - Auto-detect installation directory
-if [[ -d "/srv/mascloner" ]]; then
-    INSTALL_DIR="/srv/mascloner"
-    MASCLONER_USER="mascloner"
-elif [[ -d "$HOME/mascloner" ]]; then
-    INSTALL_DIR="$HOME/mascloner"
-    MASCLONER_USER="$USER"
-else
-    echo -e "${RED}[ERROR]${NC} Cannot find MasCloner installation directory"
-    echo "Searched: /srv/mascloner and $HOME/mascloner"
-    exit 1
-fi
+# Configuration - Fixed to ~/mascloner
+INSTALL_DIR="$HOME/mascloner"
+MASCLONER_USER="$USER"
 
 echo -e "${BLUE}[INFO]${NC} Using installation directory: $INSTALL_DIR"
 echo -e "${BLUE}[INFO]${NC} Using user: $MASCLONER_USER"

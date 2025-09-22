@@ -12,9 +12,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MASCLONER_USER="mascloner"
-MASCLONER_GROUP="mascloner"
-INSTALL_DIR="/srv/mascloner"
+MASCLONER_USER="$USER"
+MASCLONER_GROUP="$USER"
+INSTALL_DIR="$HOME/mascloner"
 PYTHON_VERSION="3.11"
 
 # Logging
@@ -104,12 +104,25 @@ install_cloudflared() {
     
     if command -v cloudflared &> /dev/null; then
         echo_warning "cloudflared already installed, skipping"
+        cloudflared version
         return 0
     fi
     
-    # Use direct download method (more reliable than repositories)
-    echo_info "Installing cloudflared via direct download (recommended method)..."
-    install_cloudflared_direct
+    # Use official Cloudflare installation method for Debian/Ubuntu
+    echo_info "Installing cloudflared using official Cloudflare repository..."
+    
+    # Add Cloudflare GPG key
+    echo_info "Adding Cloudflare GPG key..."
+    mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    
+    # Add repository to apt sources
+    echo_info "Adding Cloudflare repository..."
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | tee /etc/apt/sources.list.d/cloudflared.list
+    
+    # Update and install
+    echo_info "Updating package lists and installing cloudflared..."
+    apt-get update && apt-get install -y cloudflared
     
     # Verify installation
     if command -v cloudflared &> /dev/null; then
@@ -121,58 +134,24 @@ install_cloudflared() {
     fi
 }
 
-install_cloudflared_direct() {
-    echo_info "Installing cloudflared via direct download..."
+create_user() {
+    echo_info "Configuring user environment..."
     
-    # Clean up any potential repository artifacts
-    rm -f /etc/apt/sources.list.d/cloudflared.list
+    # Since we're using the current user, just verify they exist
+    echo_info "Using current user: $MASCLONER_USER"
+    echo_info "User home directory: $HOME"
     
-    # Detect architecture
-    ARCH=$(uname -m)
-    case $ARCH in
-        x86_64) CLOUDFLARED_ARCH="amd64" ;;
-        aarch64) CLOUDFLARED_ARCH="arm64" ;;
-        armv7l) CLOUDFLARED_ARCH="arm" ;;
-        *) echo_error "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    
-    echo_info "Detected architecture: $ARCH -> cloudflared-linux-${CLOUDFLARED_ARCH}"
-    
-    # Download latest cloudflared
-    CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CLOUDFLARED_ARCH}"
-    
-    echo_info "Downloading from: $CLOUDFLARED_URL"
-    
-    # Download with proper error handling
-    if curl -L --fail "$CLOUDFLARED_URL" -o /usr/local/bin/cloudflared; then
-        chmod +x /usr/local/bin/cloudflared
-        
-        # Verify the download
-        if /usr/local/bin/cloudflared --version >/dev/null 2>&1; then
-            echo_success "cloudflared downloaded and installed successfully"
-        else
-            echo_error "Downloaded cloudflared binary is not executable"
-            rm -f /usr/local/bin/cloudflared
-            exit 1
-        fi
-    else
-        echo_error "Failed to download cloudflared from GitHub releases"
+    if ! id "$MASCLONER_USER" &>/dev/null; then
+        echo_error "Current user $MASCLONER_USER doesn't exist (this shouldn't happen)"
         exit 1
     fi
-}
-
-create_user() {
-    echo_info "Creating mascloner user..."
     
-    if id "$MASCLONER_USER" &>/dev/null; then
-        echo_warning "User $MASCLONER_USER already exists, skipping creation"
-    else
-        useradd -r -s /bin/bash -d "$INSTALL_DIR" -c "MasCloner Service User" "$MASCLONER_USER"
-        echo_success "User $MASCLONER_USER created"
+    # Ensure user group exists (it should already)
+    if ! getent group "$MASCLONER_GROUP" >/dev/null 2>&1; then
+        echo_warning "Group $MASCLONER_GROUP doesn't exist, this is unusual"
     fi
     
-    # Ensure user has proper group
-    usermod -a -G "$MASCLONER_GROUP" "$MASCLONER_USER" 2>/dev/null || groupadd "$MASCLONER_GROUP"
+    echo_success "User configuration verified"
 }
 
 setup_directories() {
