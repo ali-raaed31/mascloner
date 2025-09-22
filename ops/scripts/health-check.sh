@@ -5,7 +5,7 @@ set -euo pipefail
 # Comprehensive system health monitoring
 
 # Configuration
-INSTALL_DIR="/srv/mascloner"
+INSTALL_DIR="$HOME/mascloner"
 API_URL="http://127.0.0.1:8787"
 UI_URL="http://127.0.0.1:8501"
 
@@ -29,14 +29,14 @@ check_services() {
     local services=("mascloner-api" "mascloner-ui" "mascloner-tunnel")
     
     for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service.service"; then
+        if sudo systemctl is-active --quiet "$service.service"; then
             echo_ok "$service service is running"
         else
             echo_error "$service service is not running"
             ((ISSUES++))
         fi
         
-        if systemctl is-enabled --quiet "$service.service"; then
+        if sudo systemctl is-enabled --quiet "$service.service"; then
             echo_ok "$service service is enabled"
         else
             echo_warning "$service service is not enabled for startup"
@@ -188,7 +188,7 @@ check_network() {
 check_cloudflare_tunnel() {
     echo_info "Checking Cloudflare Tunnel..."
     
-    if systemctl is-active --quiet mascloner-tunnel.service; then
+    if sudo systemctl is-active --quiet mascloner-tunnel.service; then
         echo_ok "Cloudflare Tunnel service is running"
         
         # Check tunnel configuration
@@ -271,13 +271,13 @@ generate_summary() {
     echo "  Load: $(uptime | awk -F'load average:' '{print $2}')"
     echo "  Memory: $(free -h | awk 'NR==2{printf "%.1f%% (%s/%s)", $3*100/$2, $3, $2}')"
     
-    if systemctl is-active --quiet mascloner-api.service; then
+    if sudo systemctl is-active --quiet mascloner-api.service; then
         echo "  API Status: Running"
     else
         echo "  API Status: Stopped"
     fi
     
-    if systemctl is-active --quiet mascloner-ui.service; then
+    if sudo systemctl is-active --quiet mascloner-ui.service; then
         echo "  UI Status: Running"
     else
         echo "  UI Status: Stopped"

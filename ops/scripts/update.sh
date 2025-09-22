@@ -5,8 +5,8 @@ set -euo pipefail
 # Safely updates MasCloner to the latest version
 
 # Configuration
-INSTALL_DIR="/srv/mascloner"
-MASCLONER_USER="mascloner"
+INSTALL_DIR="$HOME/mascloner"
+MASCLONER_USER="$USER"
 BACKUP_DIR="/var/backups/mascloner"
 GIT_REPO="https://github.com/mascloner/mascloner.git"
 
@@ -71,8 +71,8 @@ stop_services() {
     local services=("mascloner-tunnel" "mascloner-ui" "mascloner-api")
     
     for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service.service"; then
-            systemctl stop "$service.service"
+        if sudo systemctl is-active --quiet "$service.service"; then
+            sudo systemctl stop "$service.service"
             echo_info "Stopped $service service"
         fi
     done
@@ -165,7 +165,7 @@ update_systemd_services() {
     done
     
     if [[ "$services_updated" == true ]]; then
-        systemctl daemon-reload
+        sudo systemctl daemon-reload
         echo_success "SystemD services updated"
     else
         echo_info "No service updates needed"
@@ -198,12 +198,12 @@ start_services() {
     local services=("mascloner-api" "mascloner-ui" "mascloner-tunnel")
     
     for service in "${services[@]}"; do
-        if systemctl is-enabled --quiet "$service.service"; then
-            systemctl start "$service.service"
+        if sudo systemctl is-enabled --quiet "$service.service"; then
+            sudo systemctl start "$service.service"
             
             # Wait and check if service started successfully
             sleep 3
-            if systemctl is-active --quiet "$service.service"; then
+            if sudo systemctl is-active --quiet "$service.service"; then
                 echo_success "Started $service service"
             else
                 echo_error "Failed to start $service service"
@@ -270,7 +270,7 @@ print_completion() {
     echo "4. 🔧 Review new configuration options if any"
     echo
     echo_warning "If you encounter issues:"
-    echo "- Check service status: systemctl status mascloner-api mascloner-ui"
+    echo "- Check service status: sudo systemctl status mascloner-api mascloner-ui"
     echo "- Review logs: journalctl -u mascloner-api --since '1 hour ago'"
     echo "- Restore from backup if needed"
     echo

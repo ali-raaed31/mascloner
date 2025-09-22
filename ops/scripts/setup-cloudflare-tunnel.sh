@@ -79,7 +79,7 @@ cleanup_existing() {
     fi
     
     # Check for running tunnel service
-    if systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
+    if sudo systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
         echo_warning "MasCloner tunnel service is currently running"
         needs_cleanup=true
         cleanup_items+=("Running tunnel service")
@@ -111,10 +111,10 @@ cleanup_existing() {
             echo_info "Cleaning up existing configuration..."
             
             # Stop tunnel service
-            if systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
+            if sudo systemctl is-active --quiet mascloner-tunnel.service 2>/dev/null; then
                 echo_info "Stopping tunnel service..."
-                systemctl stop mascloner-tunnel.service || true
-                systemctl disable mascloner-tunnel.service || true
+                sudo systemctl stop mascloner-tunnel.service || true
+                sudo systemctl disable mascloner-tunnel.service || true
             fi
             
             # Delete existing tunnels
@@ -753,7 +753,6 @@ install_tunnel_service() {
     local cred_file=""
     local search_locations=(
         "/root/.cloudflared/"
-        "/srv/mascloner/.cloudflared/"
         "$INSTALL_DIR/.cloudflared/"
         "$HOME/.cloudflared/"
         "/home/$MASCLONER_USER/.cloudflared/"
@@ -763,7 +762,6 @@ install_tunnel_service() {
     if [[ -n "$TUNNEL_ID" ]]; then
         search_locations+=(
             "/root/.cloudflared/${TUNNEL_ID}.json"
-            "/srv/mascloner/.cloudflared/${TUNNEL_ID}.json"
             "$INSTALL_DIR/.cloudflared/${TUNNEL_ID}.json"
         )
     fi
@@ -829,15 +827,15 @@ install_tunnel_service() {
     
     # Enable and start tunnel service
     echo_info "Enabling and starting tunnel service..."
-    systemctl enable mascloner-tunnel.service
-    systemctl start mascloner-tunnel.service
+    sudo systemctl enable mascloner-tunnel.service
+    sudo systemctl start mascloner-tunnel.service
     
     # Check if service started successfully
     sleep 5
-    if systemctl is-active --quiet mascloner-tunnel.service; then
+    if sudo systemctl is-active --quiet mascloner-tunnel.service; then
         echo_success "Cloudflare Tunnel service started successfully"
         echo_info "Service status:"
-        systemctl status mascloner-tunnel.service --no-pager -l
+        sudo systemctl status mascloner-tunnel.service --no-pager -l
     else
         echo_error "Failed to start Cloudflare Tunnel service"
         echo_error "Service logs:"
@@ -884,7 +882,7 @@ print_completion() {
     echo "2. 🌐 Access MasCloner at: https://$FULL_HOSTNAME"
     echo
     echo "3. 📊 Monitor tunnel status:"
-    echo "   systemctl status mascloner-tunnel"
+    echo "   sudo systemctl status mascloner-tunnel"
     echo "   journalctl -f -u mascloner-tunnel"
     echo
     echo_warning "⚠️ If DNS record creation failed:"
@@ -909,7 +907,7 @@ print_completion() {
     echo_info "To modify tunnel configuration:"
     echo "1. Edit: $INSTALL_DIR/etc/cloudflare-tunnel.yaml"
     echo "2. Validate: cloudflared tunnel --config $INSTALL_DIR/etc/cloudflare-tunnel.yaml ingress validate"
-    echo "3. Restart: systemctl restart mascloner-tunnel"
+    echo "3. Restart: sudo systemctl restart mascloner-tunnel"
 }
 
 # Main setup flow

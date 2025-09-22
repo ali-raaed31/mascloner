@@ -261,15 +261,23 @@ EOF
 install_systemd_services() {
     echo_info "Installing SystemD services..."
     
-    # Copy service files
-    cp "$(dirname "$0")/../systemd/"*.service /etc/systemd/system/
+    # Process and copy service files with variable substitution
+    for service_file in "$(dirname "$0")/../systemd/"*.service; do
+        service_name=$(basename "$service_file")
+        echo_info "Installing service: $service_name"
+        
+        # Substitute template variables
+        sed -e "s|INSTALL_DIR|$INSTALL_DIR|g" \
+            -e "s|MASCLONER_USER|$MASCLONER_USER|g" \
+            "$service_file" > "/etc/systemd/system/$service_name"
+    done
     
     # Reload systemd
-    systemctl daemon-reload
+    sudo systemctl daemon-reload
     
     # Enable services
-    systemctl enable mascloner-api.service
-    systemctl enable mascloner-ui.service
+    sudo systemctl enable mascloner-api.service
+    sudo systemctl enable mascloner-ui.service
     
     echo_success "SystemD services installed and enabled"
 }
@@ -277,7 +285,10 @@ install_systemd_services() {
 setup_logrotate() {
     echo_info "Setting up log rotation..."
     
-    cp "$(dirname "$0")/../logrotate/mascloner" /etc/logrotate.d/
+    # Process logrotate configuration with variable substitution
+    sed -e "s|INSTALL_DIR|$INSTALL_DIR|g" \
+        -e "s|MASCLONER_USER|$MASCLONER_USER|g" \
+        "$(dirname "$0")/../logrotate/mascloner" > /etc/logrotate.d/mascloner
     
     # Test logrotate configuration
     logrotate -d /etc/logrotate.d/mascloner
@@ -348,11 +359,11 @@ start_services() {
     echo_info "Starting MasCloner services..."
     
     # Start API service first
-    systemctl start mascloner-api.service
+    sudo systemctl start mascloner-api.service
     sleep 5
     
     # Check if API started successfully
-    if systemctl is-active --quiet mascloner-api.service; then
+    if sudo systemctl is-active --quiet mascloner-api.service; then
         echo_success "MasCloner API started successfully"
     else
         echo_error "Failed to start MasCloner API"
@@ -361,11 +372,11 @@ start_services() {
     fi
     
     # Start UI service
-    systemctl start mascloner-ui.service
+    sudo systemctl start mascloner-ui.service
     sleep 10
     
     # Check if UI started successfully
-    if systemctl is-active --quiet mascloner-ui.service; then
+    if sudo systemctl is-active --quiet mascloner-ui.service; then
         echo_success "MasCloner UI started successfully"
     else
         echo_error "Failed to start MasCloner UI"
@@ -394,7 +405,7 @@ print_next_steps() {
     echo "   - Cloudflare Tunnel: (configure your domain)"
     echo
     echo "4. 📊 Check service status:"
-    echo "   systemctl status mascloner-api mascloner-ui"
+    echo "   sudo systemctl status mascloner-api mascloner-ui"
     echo
     echo "5. 📋 View logs:"
     echo "   journalctl -f -u mascloner-api"

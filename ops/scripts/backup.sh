@@ -5,7 +5,7 @@ set -euo pipefail
 # Creates backups of database, configuration, and logs
 
 # Configuration
-INSTALL_DIR="/srv/mascloner"
+INSTALL_DIR="$HOME/mascloner"
 BACKUP_DIR="/var/backups/mascloner"
 RETENTION_DAYS=30
 DATE=$(date +%Y%m%d_%H%M%S)
@@ -53,7 +53,7 @@ MasCloner Backup Metadata
 Created: $(date)
 Hostname: $(hostname)
 Version: $(cd "$INSTALL_DIR" && git describe --tags 2>/dev/null || echo "unknown")
-Services: $(systemctl is-active mascloner-api mascloner-ui mascloner-tunnel 2>/dev/null || echo "unknown")
+Services: $(sudo systemctl is-active mascloner-api mascloner-ui mascloner-tunnel 2>/dev/null || echo "unknown")
 EOF
 
 # Cleanup old backups
