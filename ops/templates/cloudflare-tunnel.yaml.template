@@ -1,0 +1,44 @@
+# Cloudflare Tunnel Configuration for MasCloner
+# This file will be customized during installation
+
+tunnel: ${TUNNEL_ID}
+credentials-file: /srv/mascloner/etc/cloudflare-credentials.json
+
+# Ingress rules
+ingress:
+  # MasCloner UI (protected by Zero Trust)
+  - hostname: ${MASCLONER_HOSTNAME}
+    service: http://127.0.0.1:8501
+    originRequest:
+      # Streamlit specific settings
+      noTLSVerify: true
+      connectTimeout: 10s
+      tlsTimeout: 10s
+      httpHostHeader: ${MASCLONER_HOSTNAME}
+      
+  # API endpoint (internal only, no external access)
+  # Uncomment if you need API access from outside (not recommended)
+  # - hostname: api.${MASCLONER_DOMAIN}
+  #   service: http://127.0.0.1:8787
+  #   originRequest:
+  #     noTLSVerify: true
+      
+  # Catch-all rule (required)
+  - service: http_status:404
+
+# Optional: Origins configuration for better performance
+originRequest:
+  connectTimeout: 30s
+  tlsTimeout: 10s
+  tcpKeepAlive: 30s
+  noHappyEyeballs: false
+  keepAliveConnections: 100
+  keepAliveTimeout: 90s
+  httpHostHeader: ${MASCLONER_HOSTNAME}
+
+# Logging
+loglevel: info
+logfile: /srv/mascloner/logs/cloudflare-tunnel.log
+
+# Metrics (optional)
+metrics: 127.0.0.1:8080

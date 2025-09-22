@@ -14,6 +14,7 @@ from .db import init_db, get_db, get_db_info
 from .models import Run, FileEvent, ConfigKV
 from .scheduler import start_scheduler, stop_scheduler, get_scheduler, sync_job, cleanup_old_runs
 from .config import config
+from .tree_builder import FileTreeBuilder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -410,6 +411,237 @@ async def cleanup_database(keep_runs: int = 100, db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database cleanup failed: {str(e)}"
         )
+
+
+# Get all events
+@app.get("/events", response_model=List[FileEventResponse])
+async def get_events(limit: int = 200, db: Session = Depends(get_db)):
+    """Get recent file events across all runs."""
+    try:
+        events = db.execute(
+            select(FileEvent)
+            .order_by(desc(FileEvent.id))
+            .limit(limit)
+        ).scalars().all()
+        
+        return [
+            FileEventResponse(
+                id=event.id,
+                timestamp=event.timestamp.isoformat(),
+                action=event.action,
+                file_path=event.file_path,
+                file_size=event.file_size,
+                file_hash=event.file_hash,
+                message=event.message
+            )
+            for event in events
+        ]
+        
+    except Exception as e:
+        logger.error(f"Failed to get events: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get events: {str(e)}"
+        )
+
+
+# Tree view models
+class TreeNodeResponse(BaseModel):
+    """Tree node for API response."""
+    name: str
+    path: str
+    type: str  # file | folder
+    size: int = 0
+    last_sync: Optional[str] = None
+    status: str = "unknown"  # synced | pending | error | conflict
+    children: List["TreeNodeResponse"] = []
+
+
+class TreeResponse(BaseModel):
+    """Response model for file tree."""
+    root: TreeNodeResponse
+    total_files: int
+    total_folders: int
+
+
+def _convert_tree_node(node) -> TreeNodeResponse:
+    """Convert TreeNode to TreeNodeResponse."""
+    return TreeNodeResponse(
+        name=node.name,
+        path=node.path,
+        type=node.type,
+        size=node.size,
+        last_sync=node.last_sync,
+        status=node.status,
+        children=[_convert_tree_node(child) for child in node.children]
+    )
+
+
+@app.get("/tree", response_model=TreeResponse)
+async def get_file_tree(path: str = "", db: Session = Depends(get_db)):
+    """Get file tree structure with sync status."""
+    try:
+        # Get all file events to build tree
+        events = db.execute(
+            select(FileEvent)
+            .order_by(desc(FileEvent.timestamp))
+        ).scalars().all()
+        
+        # Build tree structure
+        tree_builder = FileTreeBuilder()
+        root_node = tree_builder.build_tree(events, path)
+        
+        # Count statistics
+        stats = tree_builder.get_statistics(root_node)
+        
+        # Convert to response model
+        root_response = _convert_tree_node(root_node)
+        
+        return TreeResponse(
+            root=root_response,
+            total_files=stats["files"],
+            total_folders=stats["folders"]
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get file tree: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get file tree: {str(e)}"
+        )
+
+
+@app.get("/tree/status/{path:path}", response_model=Dict[str, Any])
+async def get_path_status(path: str, db: Session = Depends(get_db)):
+    """Get sync status for a specific path."""
+    try:
+        # Get most recent event for this path
+        latest_event = db.execute(
+            select(FileEvent)
+            .where(FileEvent.file_path == path)
+            .order_by(desc(FileEvent.timestamp))
+        ).scalars().first()
+        
+        if latest_event:
+            return {
+                "path": path,
+                "status": latest_event.action,
+                "last_sync": latest_event.timestamp.isoformat(),
+                "size": latest_event.file_size,
+                "message": latest_event.message
+            }
+        else:
+            return {
+                "path": path,
+                "status": "unknown",
+                "last_sync": None,
+                "size": 0,
+                "message": "No sync history"
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to get path status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get path status: {str(e)}"
+        )
+
+
+# Enhanced remote testing and configuration
+class WebDAVTestRequest(BaseModel):
+    """Request model for WebDAV connection testing."""
+    url: str
+    user: str
+    pass_: str = Field(alias="pass")
+    remote_name: str
+
+
+@app.post("/test/nextcloud/webdav", response_model=ApiResponse)
+async def test_nextcloud_webdav(request: WebDAVTestRequest):
+    """Test Nextcloud WebDAV connection and create rclone remote."""
+    try:
+        # Import rclone runner for testing
+        from .rclone_runner import RcloneRunner
+        
+        runner = RcloneRunner()
+        
+        # Test WebDAV connection
+        test_result = runner.test_webdav_connection(
+            url=request.url,
+            user=request.user,
+            password=request.pass_,
+            remote_name=request.remote_name
+        )
+        
+        if test_result["success"]:
+            return ApiResponse(
+                success=True,
+                message="Nextcloud WebDAV connection successful and remote created",
+                data={"remote_name": request.remote_name}
+            )
+        else:
+            return ApiResponse(
+                success=False,
+                message=f"WebDAV connection failed: {test_result.get('error', 'Unknown error')}"
+            )
+            
+    except Exception as e:
+        logger.error(f"WebDAV test failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"WebDAV test failed: {str(e)}"
+        )
+
+
+@app.get("/browse/folders/{remote_name}", response_model=Dict[str, Any])
+async def browse_remote_folders(remote_name: str, path: str = ""):
+    """Browse folders in a remote."""
+    try:
+        from .rclone_runner import RcloneRunner
+        
+        runner = RcloneRunner()
+        folders = runner.list_folders(remote_name, path)
+        
+        return {
+            "status": "success",
+            "folders": folders,
+            "remote": remote_name,
+            "path": path
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to browse folders: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "folders": []
+        }
+
+
+@app.get("/estimate/size", response_model=Dict[str, Any])
+async def estimate_sync_size(source: str, dest: str):
+    """Estimate the size of a sync operation."""
+    try:
+        from .rclone_runner import RcloneRunner
+        
+        runner = RcloneRunner()
+        size_info = runner.estimate_sync_size(source, dest)
+        
+        return {
+            "status": "success",
+            "size_mb": size_info.get("size_mb", 0),
+            "file_count": size_info.get("file_count", 0),
+            "folder_count": size_info.get("folder_count", 0)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to estimate size: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "size_mb": 0,
+            "file_count": 0
+        }
 
 
 # Database info

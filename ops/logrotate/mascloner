@@ -1,0 +1,37 @@
+/srv/mascloner/logs/*.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 644 mascloner mascloner
+    postrotate
+        systemctl reload mascloner-api mascloner-ui 2>/dev/null || true
+    endscript
+}
+
+/srv/mascloner/logs/sync-*.log {
+    daily
+    missingok
+    rotate 90
+    compress
+    delaycompress
+    notifempty
+    create 644 mascloner mascloner
+    maxsize 100M
+}
+
+# Cloudflare tunnel logs
+/var/log/cloudflared.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 644 mascloner mascloner
+    postrotate
+        systemctl reload mascloner-tunnel 2>/dev/null || true
+    endscript
+}

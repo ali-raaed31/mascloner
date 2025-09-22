@@ -95,92 +95,87 @@ if st.session_state.setup_step == 1:
     else:
         st.info("Please confirm all prerequisites before continuing.")
 
-# Step 2: rclone Configuration
+# Step 2: Google Drive Setup
 elif st.session_state.setup_step == 2:
-    st.header("🔧 rclone Configuration")
+    st.header("📁 Google Drive Setup")
     
     st.markdown("""
-    **MasCloner** uses rclone to handle file transfers. You need to configure two remotes:
-    1. **Google Drive remote** - for accessing your Drive files
-    2. **Nextcloud WebDAV remote** - for uploading to Nextcloud
+    We'll configure **Google Drive** access using rclone with OAuth authentication.
+    This requires a quick CLI setup with guided instructions.
     """)
     
-    tab1, tab2 = st.tabs(["📁 Google Drive", "☁️ Nextcloud"])
-    
-    with tab1:
-        st.subheader("🔗 Google Drive Remote Setup")
+    # Check if already configured
+    if "gdrive_remote" in st.session_state.setup_data:
+        st.success("✅ Google Drive already configured!")
         
-        st.markdown("""
-        **Create Google Drive remote:**
+        # Show current config
+        st.info(f"Remote name: **{st.session_state.setup_data['gdrive_remote']}**")
         
-        1. Open terminal and run:
-        ```bash
-        rclone config create gdrive drive
-        ```
-        
-        2. Follow the OAuth flow to authorize access
-        3. Test the connection:
-        ```bash
-        rclone lsd gdrive:
-        ```
-        """)
-        
-        gdrive_remote = st.text_input(
-            "Google Drive Remote Name",
-            value="gdrive",
-            help="Name you gave to your Google Drive remote in rclone"
-        )
-        
-        if st.button("🧪 Test Google Drive Connection"):
+        # Test connection button
+        if st.button("🔄 Test Connection Again"):
             with st.spinner("Testing Google Drive connection..."):
-                result = api.post("/test/gdrive", {"remote": gdrive_remote})
+                result = api.post("/test/gdrive", {"remote": st.session_state.setup_data['gdrive_remote']})
                 if result and result.get("status") == "success":
                     st.success("✅ Google Drive connection successful!")
-                    st.session_state.setup_data["gdrive_remote"] = gdrive_remote
                 else:
                     error_msg = result.get("error", "Unknown error") if result else "API error"
-                    st.error(f"❌ Google Drive connection failed: {error_msg}")
+                    st.error(f"❌ Connection failed: {error_msg}")
+                    st.session_state.setup_data.pop("gdrive_remote", None)
+                    st.rerun()
     
-    with tab2:
-        st.subheader("☁️ Nextcloud WebDAV Remote Setup")
+    else:
+        # Setup instructions
+        st.subheader("🛠️ Step-by-Step Setup")
         
         st.markdown("""
-        **Create Nextcloud WebDAV remote:**
+        **Follow these exact steps:**
         
-        1. Open terminal and run:
-        ```bash
-        rclone config create ncwebdav webdav \\
-            url https://your-nextcloud.com/remote.php/dav/files/USERNAME/ \\
-            vendor nextcloud \\
-            user USERNAME \\
-            pass PASSWORD
-        ```
-        
-        2. Test the connection:
-        ```bash
-        rclone lsd ncwebdav:
-        ```
+        1. **Open a terminal/SSH session** to your server
+        2. **Switch to the mascloner user:**
         """)
         
-        nc_remote = st.text_input(
-            "Nextcloud Remote Name",
-            value="ncwebdav",
-            help="Name you gave to your Nextcloud WebDAV remote in rclone"
+        st.code("sudo -u mascloner -i")
+        
+        st.markdown("3. **Create the Google Drive remote:**")
+        
+        gdrive_remote_name = st.text_input(
+            "Remote name",
+            value="gdrive",
+            help="Choose a name for your Google Drive remote"
         )
         
-        if st.button("🧪 Test Nextcloud Connection"):
-            with st.spinner("Testing Nextcloud connection..."):
-                result = api.post("/test/nextcloud", {"remote": nc_remote})
-                if result and result.get("status") == "success":
-                    st.success("✅ Nextcloud connection successful!")
-                    st.session_state.setup_data["nc_remote"] = nc_remote
-                else:
-                    error_msg = result.get("error", "Unknown error") if result else "API error"
-                    st.error(f"❌ Nextcloud connection failed: {error_msg}")
-    
-    st.markdown("---")
+        st.code(f"rclone config create {gdrive_remote_name} drive")
+        
+        st.markdown("""
+        4. **Follow the OAuth flow** that opens in your browser
+        5. **Test the connection:**
+        """)
+        
+        st.code(f"rclone lsd {gdrive_remote_name}:")
+        
+        st.markdown("6. **Click the test button below** when complete:")
+        
+        # Test button
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            if st.button("🧪 Test Connection", type="primary"):
+                with st.spinner("Testing Google Drive connection..."):
+                    result = api.post("/test/gdrive", {"remote": gdrive_remote_name})
+                    if result and result.get("status") == "success":
+                        st.success("✅ Google Drive connection successful!")
+                        st.session_state.setup_data["gdrive_remote"] = gdrive_remote_name
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        error_msg = result.get("error", "Unknown error") if result else "API error"
+                        st.error(f"❌ Connection failed: {error_msg}")
+                        st.info("💡 Make sure you completed all steps above")
+        
+        with col2:
+            st.info("Complete the CLI setup first, then test the connection")
     
     # Navigation
+    st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("◀️ Previous", use_container_width=True):
@@ -188,34 +183,229 @@ elif st.session_state.setup_step == 2:
             st.rerun()
     
     with col2:
-        if ("gdrive_remote" in st.session_state.setup_data and 
-            "nc_remote" in st.session_state.setup_data):
-            if st.button("▶️ Next", type="primary", use_container_width=True):
+        if "gdrive_remote" in st.session_state.setup_data:
+            if st.button("▶️ Next: Nextcloud Setup", type="primary", use_container_width=True):
                 st.session_state.setup_step = 3
                 st.rerun()
         else:
-            st.button("▶️ Next (Test connections first)", disabled=True, use_container_width=True)
+            st.button("▶️ Next (Complete Google Drive setup first)", disabled=True, use_container_width=True)
 
-# Step 3: Source and Destination Paths
+# Step 3: Nextcloud Setup
 elif st.session_state.setup_step == 3:
-    st.header("📁 Source & Destination Configuration")
+    st.header("☁️ Nextcloud Setup")
     
-    st.markdown("Configure which folders to sync between Google Drive and Nextcloud.")
+    st.markdown("""
+    Configure **Nextcloud WebDAV** access directly through this interface.
+    We'll test the connection in real-time and create the rclone remote automatically.
+    """)
+    
+    # Check if already configured
+    if "nc_remote" in st.session_state.setup_data:
+        st.success("✅ Nextcloud already configured!")
+        
+        # Show current config
+        nc_url = st.session_state.setup_data.get("nc_webdav_url", "Unknown")
+        nc_user = st.session_state.setup_data.get("nc_user", "Unknown")
+        
+        st.info(f"""
+        **Configuration:**
+        - Remote name: **{st.session_state.setup_data['nc_remote']}**
+        - WebDAV URL: `{nc_url}`
+        - Username: `{nc_user}`
+        """)
+        
+        # Test connection button
+        if st.button("🔄 Test Connection Again"):
+            with st.spinner("Testing Nextcloud connection..."):
+                result = api.post("/test/nextcloud", {"remote": st.session_state.setup_data['nc_remote']})
+                if result and result.get("status") == "success":
+                    st.success("✅ Nextcloud connection successful!")
+                else:
+                    error_msg = result.get("error", "Unknown error") if result else "API error"
+                    st.error(f"❌ Connection failed: {error_msg}")
+                    # Clear config to allow reconfiguration
+                    for key in ["nc_remote", "nc_webdav_url", "nc_user", "nc_pass"]:
+                        st.session_state.setup_data.pop(key, None)
+                    st.rerun()
+    
+    else:
+        # Setup form
+        st.subheader("🛠️ Nextcloud Configuration")
+        
+        with st.form("nextcloud_setup"):
+            # WebDAV URL
+            st.markdown("**1. WebDAV URL**")
+            nc_url = st.text_input(
+                "Nextcloud WebDAV URL",
+                placeholder="https://cloud.example.com/remote.php/dav/files/USERNAME/",
+                help="Full WebDAV URL from your Nextcloud settings"
+            )
+            
+            st.info("""
+            💡 **How to find your WebDAV URL:**
+            1. Log into your Nextcloud
+            2. Go to **Settings** → **Personal** → **Security**
+            3. Look for **WebDAV** section
+            4. Copy the URL (usually ends with `/remote.php/dav/files/USERNAME/`)
+            """)
+            
+            st.markdown("---")
+            
+            # Credentials
+            st.markdown("**2. Authentication**")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                nc_user = st.text_input(
+                    "Username",
+                    placeholder="your-username",
+                    help="Your Nextcloud username"
+                )
+            
+            with col2:
+                nc_pass = st.text_input(
+                    "App Password",
+                    type="password",
+                    placeholder="xxxx-xxxx-xxxx-xxxx",
+                    help="Use an App Password, not your regular password"
+                )
+            
+            st.warning("""
+            🔐 **Security Note:** Use an **App Password** instead of your regular password:
+            1. Go to **Settings** → **Personal** → **Security**
+            2. Scroll to **App passwords**
+            3. Create a new app password for "MasCloner"
+            4. Use the generated password above
+            """)
+            
+            st.markdown("---")
+            
+            # Remote name
+            st.markdown("**3. Remote Name**")
+            nc_remote_name = st.text_input(
+                "Remote Name",
+                value="ncwebdav",
+                help="Choose a name for this Nextcloud remote"
+            )
+            
+            # Submit button
+            submitted = st.form_submit_button("🧪 Test & Save Configuration", type="primary")
+            
+            if submitted:
+                # Validate inputs
+                if not all([nc_url, nc_user, nc_pass, nc_remote_name]):
+                    st.error("❌ Please fill in all fields")
+                elif not nc_url.startswith(("http://", "https://")):
+                    st.error("❌ WebDAV URL must start with http:// or https://")
+                elif not nc_url.endswith("/"):
+                    st.error("❌ WebDAV URL should end with a forward slash (/)")
+                else:
+                    with st.spinner("Testing Nextcloud connection..."):
+                        # Test connection via API
+                        test_data = {
+                            "url": nc_url,
+                            "user": nc_user,
+                            "pass": nc_pass,
+                            "remote_name": nc_remote_name
+                        }
+                        
+                        result = api.post("/test/nextcloud/webdav", test_data)
+                        
+                        if result and result.get("status") == "success":
+                            st.success("✅ Nextcloud connection successful!")
+                            st.success("✅ rclone remote created automatically!")
+                            
+                            # Save configuration
+                            st.session_state.setup_data.update({
+                                "nc_remote": nc_remote_name,
+                                "nc_webdav_url": nc_url,
+                                "nc_user": nc_user,
+                                "nc_pass": nc_pass  # Will be encrypted by API
+                            })
+                            
+                            st.balloons()
+                            st.rerun()
+                        else:
+                            error_msg = result.get("error", "Unknown error") if result else "API error"
+                            st.error(f"❌ Connection failed: {error_msg}")
+                            
+                            st.markdown("""
+                            **Common issues:**
+                            - Check WebDAV URL format
+                            - Verify username and app password
+                            - Ensure Nextcloud allows WebDAV access
+                            - Check network connectivity
+                            """)
+    
+    # Navigation
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("◀️ Previous", use_container_width=True):
+            st.session_state.setup_step = 2
+            st.rerun()
+    
+    with col2:
+        if "nc_remote" in st.session_state.setup_data:
+            if st.button("▶️ Next: Folder Selection", type="primary", use_container_width=True):
+                st.session_state.setup_step = 4
+                st.rerun()
+        else:
+            st.button("▶️ Next (Complete Nextcloud setup first)", disabled=True, use_container_width=True)
+
+# Step 4: Folder Selection
+elif st.session_state.setup_step == 4:
+    st.header("📁 Folder Selection")
+    
+    st.markdown("""
+    Now that both remotes are configured, choose which folders to sync.
+    **After authentication**, you can browse and select the actual folders.
+    """)
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📤 Google Drive Source")
         
-        gdrive_src = st.text_input(
-            "Source Path in Google Drive",
-            value=st.session_state.setup_data.get("gdrive_src", ""),
-            placeholder="Shared drives/Team/Documents",
-            help="Path within Google Drive to sync FROM (leave empty for root)"
-        )
+        # Check if we can browse folders
+        gdrive_remote = st.session_state.setup_data.get("gdrive_remote", "gdrive")
+        
+        if st.button("🔍 Browse Google Drive Folders"):
+            with st.spinner("Loading Google Drive folders..."):
+                folders = api.get(f"/browse/folders/{gdrive_remote}")
+                if folders and folders.get("status") == "success":
+                    st.session_state["gdrive_folders"] = folders.get("folders", [])
+                    st.success(f"✅ Found {len(folders.get('folders', []))} folders")
+                else:
+                    st.error("❌ Failed to browse folders. Check connection.")
+        
+        # Show folder selection
+        if "gdrive_folders" in st.session_state:
+            folder_options = ["(Root - sync everything)"] + st.session_state["gdrive_folders"]
+            
+            selected_folder = st.selectbox(
+                "Select Source Folder",
+                folder_options,
+                help="Choose which Google Drive folder to sync"
+            )
+            
+            if selected_folder == "(Root - sync everything)":
+                gdrive_src = ""
+            else:
+                gdrive_src = selected_folder
+        else:
+            # Manual entry as fallback
+            gdrive_src = st.text_input(
+                "Source Path in Google Drive",
+                value=st.session_state.setup_data.get("gdrive_src", ""),
+                placeholder="Shared drives/Team/Documents",
+                help="Path within Google Drive to sync FROM (leave empty for root)"
+            )
+            
+            st.info("💡 Click 'Browse Google Drive Folders' above to select from available folders")
         
         st.markdown("""
-        **Examples:**
+        **Common paths:**
         - `Shared drives/Team Folder/Documents`
         - `My Drive/Projects`
         - `` (empty for entire Drive)
@@ -224,12 +414,46 @@ elif st.session_state.setup_step == 3:
     with col2:
         st.subheader("📥 Nextcloud Destination")
         
-        nc_dest = st.text_input(
-            "Destination Path in Nextcloud",
-            value=st.session_state.setup_data.get("nc_dest_path", ""),
-            placeholder="Backups/GoogleDrive",
-            help="Path within Nextcloud to sync TO"
-        )
+        # Check if we can browse folders
+        nc_remote = st.session_state.setup_data.get("nc_remote", "ncwebdav")
+        
+        if st.button("🔍 Browse Nextcloud Folders"):
+            with st.spinner("Loading Nextcloud folders..."):
+                folders = api.get(f"/browse/folders/{nc_remote}")
+                if folders and folders.get("status") == "success":
+                    st.session_state["nc_folders"] = folders.get("folders", [])
+                    st.success(f"✅ Found {len(folders.get('folders', []))} folders")
+                else:
+                    st.error("❌ Failed to browse folders. Check connection.")
+        
+        # Show folder selection
+        if "nc_folders" in st.session_state:
+            folder_options = st.session_state["nc_folders"] + ["+ Create New Folder"]
+            
+            selected_folder = st.selectbox(
+                "Select Destination Folder",
+                folder_options,
+                help="Choose where to sync files in Nextcloud"
+            )
+            
+            if selected_folder == "+ Create New Folder":
+                nc_dest = st.text_input(
+                    "New Folder Name",
+                    placeholder="Backups/GoogleDrive",
+                    help="Enter the path for the new folder"
+                )
+            else:
+                nc_dest = selected_folder
+        else:
+            # Manual entry as fallback
+            nc_dest = st.text_input(
+                "Destination Path in Nextcloud",
+                value=st.session_state.setup_data.get("nc_dest_path", ""),
+                placeholder="Backups/GoogleDrive",
+                help="Path within Nextcloud to sync TO"
+            )
+            
+            st.info("💡 Click 'Browse Nextcloud Folders' above to select from existing folders")
         
         st.markdown("""
         **Examples:**
@@ -241,14 +465,11 @@ elif st.session_state.setup_step == 3:
     st.markdown("---")
     
     # Preview sync configuration
-    if gdrive_src or nc_dest:
+    if gdrive_src is not None and nc_dest:
         st.subheader("🔍 Sync Preview")
         
-        gdrive_remote = st.session_state.setup_data.get("gdrive_remote", "gdrive")
-        nc_remote = st.session_state.setup_data.get("nc_remote", "ncwebdav")
-        
         source_path = f"{gdrive_remote}:{gdrive_src}" if gdrive_src else f"{gdrive_remote}:"
-        dest_path = f"{nc_remote}:{nc_dest}" if nc_dest else f"{nc_remote}:"
+        dest_path = f"{nc_remote}:{nc_dest}"
         
         st.code(f"""
 Sync Configuration:
@@ -256,96 +477,17 @@ Sync Configuration:
   Destination: {dest_path}
   
 This will copy files FROM Google Drive TO Nextcloud.
+Files will be synced one-way (Google Drive → Nextcloud).
         """)
-    
-    # Validation and navigation
-    st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("◀️ Previous", use_container_width=True):
-            st.session_state.setup_step = 2
-            st.rerun()
-    
-    with col2:
-        if nc_dest:  # At minimum, need destination path
-            if st.button("▶️ Next", type="primary", use_container_width=True):
-                st.session_state.setup_data["gdrive_src"] = gdrive_src
-                st.session_state.setup_data["nc_dest_path"] = nc_dest
-                st.session_state.setup_step = 4
-                st.rerun()
-        else:
-            st.button("▶️ Next (Enter destination path)", disabled=True, use_container_width=True)
-
-# Step 4: Performance and Schedule Settings
-elif st.session_state.setup_step == 4:
-    st.header("⚙️ Performance & Schedule Settings")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📅 Sync Schedule")
         
-        interval_min = st.number_input(
-            "Sync Interval (minutes)",
-            min_value=1,
-            max_value=1440,
-            value=5,
-            help="How often to run sync jobs"
-        )
-        
-        jitter_sec = st.number_input(
-            "Jitter (seconds)",
-            min_value=0,
-            max_value=300,
-            value=20,
-            help="Random delay to prevent exact timing patterns"
-        )
-    
-    with col2:
-        st.subheader("🚀 Performance Settings")
-        
-        transfers = st.number_input(
-            "Parallel Transfers",
-            min_value=1,
-            max_value=20,
-            value=4,
-            help="Number of files to transfer simultaneously"
-        )
-        
-        checkers = st.number_input(
-            "Parallel Checkers",
-            min_value=1,
-            max_value=50,
-            value=8,
-            help="Number of checkers to run in parallel"
-        )
-    
-    st.markdown("---")
-    
-    # Recommended settings
-    st.subheader("💡 Recommended Settings")
-    
-    setting_type = st.radio(
-        "Choose your usage pattern:",
-        ["Light (Personal use)", "Normal (Small team)", "Heavy (Large team)"],
-        index=1
-    )
-    
-    if setting_type == "Light (Personal use)":
-        rec_interval, rec_transfers, rec_checkers = 15, 2, 4
-    elif setting_type == "Normal (Small team)":
-        rec_interval, rec_transfers, rec_checkers = 5, 4, 8
-    else:  # Heavy
-        rec_interval, rec_transfers, rec_checkers = 3, 8, 16
-    
-    if st.button("📋 Apply Recommended Settings"):
-        interval_min = rec_interval
-        transfers = rec_transfers
-        checkers = rec_checkers
-        st.rerun()
-    
-    st.info(f"💡 Recommended for {setting_type}: {rec_interval}min interval, {rec_transfers} transfers, {rec_checkers} checkers")
+        # Folder size estimation (if available)
+        if st.button("📊 Estimate Sync Size"):
+            with st.spinner("Calculating folder sizes..."):
+                size_info = api.get(f"/estimate/size?source={source_path}&dest={dest_path}")
+                if size_info and size_info.get("status") == "success":
+                    st.success(f"📁 Estimated size: {size_info.get('size_mb', 0)} MB ({size_info.get('file_count', 0)} files)")
+                else:
+                    st.warning("⚠️ Could not estimate size. This is normal for new setups.")
     
     # Navigation
     st.markdown("---")
@@ -357,15 +499,14 @@ elif st.session_state.setup_step == 4:
             st.rerun()
     
     with col2:
-        if st.button("▶️ Next", type="primary", use_container_width=True):
-            st.session_state.setup_data.update({
-                "sync_interval_min": interval_min,
-                "sync_jitter_sec": jitter_sec,
-                "transfers": transfers,
-                "checkers": checkers
-            })
-            st.session_state.setup_step = 5
-            st.rerun()
+        if nc_dest:  # At minimum, need destination path
+            if st.button("▶️ Next: Performance Settings", type="primary", use_container_width=True):
+                st.session_state.setup_data["gdrive_src"] = gdrive_src if gdrive_src else ""
+                st.session_state.setup_data["nc_dest_path"] = nc_dest
+                st.session_state.setup_step = 5
+                st.rerun()
+        else:
+            st.button("▶️ Next (Select destination folder)", disabled=True, use_container_width=True)
 
 # Step 5: Review and Complete Setup
 elif st.session_state.setup_step == 5:

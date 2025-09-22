@@ -338,6 +338,163 @@ class RcloneRunner:
         except Exception as e:
             logger.error(f"Error listing files: {e}")
             return []
+    
+    def test_webdav_connection(self, url: str, user: str, password: str, remote_name: str) -> Dict[str, Any]:
+        """Test WebDAV connection and create rclone remote if successful."""
+        try:
+            rclone_conf = get_rclone_conf_path()
+            
+            # Build rclone config command for WebDAV
+            cmd = [
+                "rclone", "config", "create", remote_name, "webdav",
+                f"url={url}",
+                "vendor=nextcloud",
+                f"user={user}",
+                f"pass={password}",
+                f"--config={rclone_conf}"
+            ]
+            
+            # Create the remote
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                return {
+                    "success": False,
+                    "error": f"Failed to create remote: {result.stderr}"
+                }
+            
+            # Test the connection
+            test_cmd = [
+                "rclone", "lsd", f"{remote_name}:", "--max-depth=1",
+                f"--config={rclone_conf}"
+            ]
+                
+            test_result = subprocess.run(
+                test_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if test_result.returncode == 0:
+                return {
+                    "success": True,
+                    "message": "WebDAV remote created and tested successfully"
+                }
+            else:
+                # Remove the failed remote
+                self._remove_remote(remote_name)
+                return {
+                    "success": False,
+                    "error": f"Connection test failed: {test_result.stderr}"
+                }
+                
+        except Exception as e:
+            logger.error(f"WebDAV test failed: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def list_folders(self, remote_name: str, path: str = "") -> List[str]:
+        """List folders in a remote."""
+        try:
+            rclone_conf = get_rclone_conf_path()
+            remote_path = f"{remote_name}:{path}" if path else f"{remote_name}:"
+            cmd = [
+                "rclone", "lsd", remote_path, "--max-depth=1",
+                f"--config={rclone_conf}"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to list folders: {result.stderr}")
+                return []
+            
+            # Parse the output to extract folder names
+            folders = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    # rclone lsd output format: "          -1 2023-01-01 12:00:00        -1 FolderName"
+                    parts = line.strip().split()
+                    if len(parts) >= 4:
+                        folder_name = ' '.join(parts[4:])
+                        full_path = f"{path}/{folder_name}" if path else folder_name
+                        folders.append(full_path)
+            
+            return sorted(folders)
+            
+        except Exception as e:
+            logger.error(f"Failed to list folders: {e}")
+            return []
+    
+    def estimate_sync_size(self, source: str, dest: str) -> Dict[str, Any]:
+        """Estimate the size of a sync operation using rclone size."""
+        try:
+            rclone_conf = get_rclone_conf_path()
+            cmd = [
+                "rclone", "size", source, "--json",
+                f"--config={rclone_conf}"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60  # Longer timeout for size operations
+            )
+            
+            if result.returncode != 0:
+                logger.warning(f"Size estimation failed: {result.stderr}")
+                return {"size_mb": 0, "file_count": 0, "folder_count": 0}
+            
+            # Parse JSON output
+            size_data = json.loads(result.stdout)
+            size_bytes = size_data.get("bytes", 0)
+            file_count = size_data.get("count", 0)
+            
+            return {
+                "size_mb": round(size_bytes / 1024 / 1024, 2),
+                "file_count": file_count,
+                "folder_count": 0  # rclone size doesn't provide folder count
+            }
+            
+        except Exception as e:
+            logger.error(f"Size estimation failed: {e}")
+            return {"size_mb": 0, "file_count": 0, "folder_count": 0}
+    
+    def _remove_remote(self, remote_name: str) -> bool:
+        """Remove an rclone remote configuration."""
+        try:
+            rclone_conf = get_rclone_conf_path()
+            cmd = [
+                "rclone", "config", "delete", remote_name,
+                f"--config={rclone_conf}"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            return result.returncode == 0
+            
+        except Exception as e:
+            logger.error(f"Failed to remove remote {remote_name}: {e}")
+            return False
 
 
 # Global runner instance

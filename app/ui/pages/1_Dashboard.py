@@ -128,36 +128,93 @@ else:
 
 st.markdown("---")
 
-# File Tree Section (Placeholder for now - will be enhanced in Phase 2.2)
-st.header("🌳 File Tree (Preview)")
-st.info("Enhanced file tree view with sync status will be available in the next update.")
+# File Tree Section  
+st.header("🌳 File Tree Preview")
 
-# Get recent file events to show activity
-events = api.get("/events")
-if events and len(events) > 0:
-    st.subheader("📂 Recent File Activity")
+# Get tree data
+tree_data = api.get("/tree")
+if tree_data:
+    col1, col2, col3 = st.columns(3)
     
-    events_data = []
-    for event in events[:20]:  # Show last 20 events
-        action_emoji = {
-            "added": "➕",
-            "updated": "📝",
-            "skipped": "⏭️", 
-            "error": "❌"
-        }.get(event.get("action", "unknown"), "❓")
+    with col1:
+        st.metric("📁 Folders", tree_data["total_folders"])
+    with col2:
+        st.metric("📄 Files", tree_data["total_files"])
+    with col3:
+        root_status = tree_data["root"]["status"]
+        status_emoji = {
+            "synced": "✅",
+            "pending": "⏳",
+            "error": "❌",
+            "conflict": "⚠️",
+            "unknown": "❓"
+        }.get(root_status, "❓")
+        st.metric("📊 Status", f"{status_emoji} {root_status}")
+    
+    # Show recent folders/files
+    if tree_data["root"].get("children"):
+        st.subheader("📂 Recent Files & Folders")
         
-        events_data.append({
-            "Action": f"{action_emoji} {event.get('action', 'unknown').title()}",
-            "File": event.get("file_path", "Unknown"),
-            "Size": f"{event.get('size', 0) / 1024:.1f} KB" if event.get("size") else "0 KB",
-            "Time": event.get("timestamp", "Unknown")[:16] if event.get("timestamp") else "Unknown"
-        })
-    
-    df_events = pd.DataFrame(events_data)
-    st.dataframe(df_events, use_container_width=True)
-
+        # Flatten tree to get recent items
+        def get_recent_items(node, items=None, max_items=10):
+            if items is None:
+                items = []
+            if len(items) >= max_items:
+                return items
+            
+            if node.get("last_sync"):
+                items.append({
+                    "name": node["name"],
+                    "type": node["type"],
+                    "status": node["status"],
+                    "last_sync": node.get("last_sync", ""),
+                    "size": node.get("size", 0)
+                })
+            
+            for child in node.get("children", []):
+                get_recent_items(child, items, max_items)
+            
+            return items
+        
+        recent_items = get_recent_items(tree_data["root"])
+        
+        if recent_items:
+            # Sort by last_sync (most recent first)
+            recent_items.sort(key=lambda x: x["last_sync"], reverse=True)
+            
+            tree_preview_data = []
+            for item in recent_items[:8]:  # Show top 8
+                type_emoji = "📁" if item["type"] == "folder" else "📄"
+                status_emoji = {
+                    "synced": "✅",
+                    "pending": "⏳", 
+                    "error": "❌",
+                    "conflict": "⚠️",
+                    "unknown": "❓"
+                }.get(item["status"], "❓")
+                
+                size_str = f"{item['size'] / 1024:.1f} KB" if item["size"] > 0 else "0 KB"
+                last_sync = item["last_sync"][:16].replace("T", " ") if item["last_sync"] else "Never"
+                
+                tree_preview_data.append({
+                    "Item": f"{type_emoji} {item['name']}",
+                    "Status": f"{status_emoji} {item['status']}",
+                    "Size": size_str,
+                    "Last Sync": last_sync
+                })
+            
+            df_tree = pd.DataFrame(tree_preview_data)
+            st.dataframe(df_tree, use_container_width=True)
+            
+            # Link to full tree view
+            if st.button("🌳 View Full File Tree", type="secondary"):
+                st.switch_page("pages/6_File_Tree.py")
+        else:
+            st.info("No synced files yet.")
+    else:
+        st.info("No files in tree yet. Run a sync to see files appear here.")
 else:
-    st.info("No file events recorded yet.")
+    st.info("File tree data not available. Ensure API is running.")
 
 # Control Panel
 st.markdown("---")
