@@ -138,6 +138,7 @@ update_code() {
     [[ -f "$temp_dir/README.md" ]] && cp "$temp_dir/README.md" "$INSTALL_DIR/"
     [[ -f "$temp_dir/DEPLOYMENT.md" ]] && cp "$temp_dir/DEPLOYMENT.md" "$INSTALL_DIR/"
     [[ -f "$temp_dir/SECURITY.md" ]] && cp "$temp_dir/SECURITY.md" "$INSTALL_DIR/"
+    [[ -d "$temp_dir/.docs" ]] && cp -r "$temp_dir/.docs" "$INSTALL_DIR/"
     
     # Copy any utility scripts
     [[ -f "$temp_dir/setup_dev_env.py" ]] && cp "$temp_dir/setup_dev_env.py" "$INSTALL_DIR/"
@@ -245,24 +246,30 @@ update_configuration() {
 start_services() {
     echo_info "Starting MasCloner services..."
     
+    # Start services in dependency order: API first, then UI, then tunnel
     local services=("mascloner-api" "mascloner-ui" "mascloner-tunnel")
     
     for service in "${services[@]}"; do
         if sudo systemctl is-enabled --quiet "$service.service"; then
+            echo_info "Starting $service service..."
             sudo systemctl start "$service.service"
             
             # Wait and check if service started successfully
-            sleep 3
+            sleep 5
             if sudo systemctl is-active --quiet "$service.service"; then
                 echo_success "Started $service service"
             else
                 echo_error "Failed to start $service service"
+                echo_error "Service logs:"
                 journalctl -u "$service.service" --no-pager -l --since "5 minutes ago"
+                return 1
             fi
         else
             echo_info "$service service not enabled, skipping"
         fi
     done
+    
+    echo_success "All services started successfully"
 }
 
 run_health_check() {
@@ -286,6 +293,27 @@ run_health_check() {
             echo_success "UI is responding"
         else
             echo_error "UI is not responding"
+        fi
+        
+        # Test new debug endpoints
+        if curl -s -f "http://127.0.0.1:8787/debug/database" >/dev/null; then
+            echo_success "Debug endpoints are working"
+        else
+            echo_warning "Debug endpoints may not be available"
+        fi
+        
+        # Test database connectivity
+        if curl -s -f "http://127.0.0.1:8787/status" | grep -q "config_valid"; then
+            echo_success "Database connectivity confirmed"
+        else
+            echo_warning "Database connectivity may have issues"
+        fi
+        
+        # Test file tree endpoint
+        if curl -s -f "http://127.0.0.1:8787/tree" >/dev/null; then
+            echo_success "File tree endpoint is working"
+        else
+            echo_warning "File tree endpoint may have issues"
         fi
     fi
 }

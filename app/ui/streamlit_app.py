@@ -11,8 +11,8 @@ from api_client import APIClient
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="MasCloner",
-    page_icon="🔄",
+    page_title="Home - MasCloner",
+    page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
