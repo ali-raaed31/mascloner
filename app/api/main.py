@@ -788,6 +788,144 @@ async def debug_rclone_logs(limit: int = 50):
         )
 
 
+@app.get("/debug/database")
+async def debug_database(db: Session = Depends(get_db)):
+    """Debug endpoint to check database state."""
+    try:
+        # Count records
+        runs_count = db.execute(select(func.count(Run.id))).scalar() or 0
+        events_count = db.execute(select(func.count(FileEvent.id))).scalar() or 0
+        
+        # Get recent runs
+        recent_runs = db.execute(
+            select(Run).order_by(desc(Run.started_at)).limit(5)
+        ).scalars().all()
+        
+        # Get recent events
+        recent_events = db.execute(
+            select(FileEvent).order_by(desc(FileEvent.timestamp)).limit(10)
+        ).scalars().all()
+        
+        # Convert to dict for JSON serialization
+        runs_data = []
+        for run in recent_runs:
+            runs_data.append({
+                "id": run.id,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "status": run.status,
+                "num_added": run.num_added,
+                "num_updated": run.num_updated,
+                "bytes_transferred": run.bytes_transferred,
+                "errors": run.errors
+            })
+        
+        events_data = []
+        for event in recent_events:
+            events_data.append({
+                "id": event.id,
+                "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+                "action": event.action,
+                "file_path": event.file_path,
+                "file_size": event.file_size,
+                "message": event.message
+            })
+        
+        return {
+            "database_state": {
+                "total_runs": runs_count,
+                "total_events": events_count,
+                "recent_runs": runs_data,
+                "recent_events": events_data
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug database check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check database: {str(e)}"
+        )
+
+
+@app.post("/debug/test-parser")
+async def test_parser(test_line: str):
+    """Test the rclone log parser with a sample line."""
+    try:
+        from .rclone_runner import RcloneLogParser
+        
+        parser = RcloneLogParser()
+        
+        # Test JSON parsing
+        json_result = parser.parse_line(test_line)
+        
+        # Test stats parsing
+        stats_result = parser.parse_stats_line(test_line)
+        
+        return {
+            "input_line": test_line,
+            "json_parsed": json_result.__dict__ if json_result else None,
+            "stats_parsed": stats_result,
+            "is_json": test_line.strip().startswith('{'),
+            "contains_transferred": "transferred" in test_line.lower(),
+            "contains_files": "files" in test_line.lower()
+        }
+        
+    except Exception as e:
+        logger.error(f"Parser test failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Parser test failed: {str(e)}"
+        )
+
+
+@app.get("/debug/test-official-format")
+async def test_official_format():
+    """Test the parser with official rclone JSON log format examples."""
+    try:
+        from .rclone_runner import RcloneLogParser
+        
+        parser = RcloneLogParser()
+        
+        # Official rclone JSON log format examples
+        test_cases = [
+            # Individual file transfer
+            '{"time":"2024-01-05T12:45:54.986126-05:00","level":"info","msg":"Copied (new) to: file.txt","size":12345,"object":"file.txt","objectType":"*local.Object","source":"operations/copy.go:368"}',
+            
+            # File replacement
+            '{"time":"2024-01-05T12:45:54.986126-05:00","level":"info","msg":"Copied (replaced) to: existing_file.txt","size":54321,"object":"existing_file.txt","objectType":"*local.Object","source":"operations/copy.go:368"}',
+            
+            # Stats line
+            '{"level":"notice","msg":"Transferred:   953.674 MiB / 953.674 MiB, 100%, 86.682 MiB/s, ETA 0s","source":"accounting/stats.go:482","stats":{"bytes":1000000000,"checks":0,"deletedDirs":0,"deletes":0,"elapsedTime":12.26351236,"errors":0,"eta":0,"fatalError":false,"renames":0,"retryError":false,"speed":90893100.62791826,"totalBytes":1000000000,"totalChecks":0,"totalTransfers":1,"transferTime":0,"transfers":1},"time":"2024-01-05T12:45:54.986126-05:00"}',
+            
+            # Error case
+            '{"time":"2024-01-05T12:45:54.986126-05:00","level":"error","msg":"Failed to copy: error_file.txt","object":"error_file.txt","source":"operations/copy.go:368"}'
+        ]
+        
+        results = []
+        for i, test_case in enumerate(test_cases):
+            json_result = parser.parse_line(test_case)
+            stats_result = parser.parse_stats_line(test_case)
+            
+            results.append({
+                "test_case": i + 1,
+                "input": test_case,
+                "json_parsed": json_result.__dict__ if json_result else None,
+                "stats_parsed": stats_result
+            })
+        
+        return {
+            "message": "Official rclone JSON format test results",
+            "test_cases": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Official format test failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Official format test failed: {str(e)}"
+        )
+
+
 # Get all events
 @app.get("/events", response_model=List[FileEventResponse])
 async def get_events(limit: int = 200, db: Session = Depends(get_db)):
