@@ -4,6 +4,7 @@ import subprocess
 import json
 import os
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -44,15 +45,39 @@ class SyncResult:
 class RcloneLogParser:
     """Parser for rclone JSON log output."""
     
+    def __init__(self):
+        self.stats_pattern = re.compile(r'Transferred:\s+(\d+)\s+/\s+(\d+),\s+(\d+)\s+files,\s+(\d+)\s+errors')
+    
     # Map rclone log messages to our action types
     ACTION_MAP = {
+        # Copy operations
         "Copied (new)": "added",
         "Copied (replaced)": "updated", 
         "Copied": "added",  # Generic copy
+        "copying": "added",  # Verb form
+        "copied": "added",   # Past tense
+        "Transferred (new)": "added",
+        "Transferred (replaced)": "updated",
+        "Transferred": "added",
+        "transferred": "added",
+        "transferred (new)": "added",
+        "transferred (replaced)": "updated",
+        
+        # Skip operations
         "Skipped": "skipped",
+        "skipped": "skipped",
+        "Skipping": "skipped",
+        "skipping": "skipped",
+        
+        # Error operations
         "Can't copy": "error",
         "Failed to copy": "error",
         "ERROR": "error",
+        "error": "error",
+        "failed": "error",
+        "Failed": "error",
+        "can't copy": "error",
+        "failed to copy": "error",
     }
     
     def parse_line(self, line: str) -> Optional[SyncEvent]:
@@ -71,6 +96,10 @@ class RcloneLogParser:
         file_path = obj.get("file") or obj.get("object") or ""
         file_size = int(obj.get("size", 0))
         
+        # Debug logging for troubleshooting
+        if file_path:  # Only log if there's a file path (actual file operations)
+            logger.debug(f"Parsing rclone log: level={level}, msg='{msg}', file='{file_path}', size={file_size}")
+        
         # Determine action from message content
         action = None
         
@@ -82,10 +111,13 @@ class RcloneLogParser:
             for key, val in self.ACTION_MAP.items():
                 if key in msg:
                     action = val
+                    logger.debug(f"Matched action '{key}' -> '{val}' for file: {file_path}")
                     break
         
         # Skip if no recognizable action
         if not action:
+            if file_path:  # Only log if there was a file path
+                logger.debug(f"No action matched for file: {file_path}, msg: '{msg}'")
             return None
         
         # Check for conflict scenarios
@@ -100,6 +132,19 @@ class RcloneLogParser:
             message=msg,
             file_hash=obj.get("hash")
         )
+    
+    def parse_stats_line(self, line: str) -> Optional[Dict[str, int]]:
+        """Parse rclone stats output line as fallback."""
+        match = self.stats_pattern.search(line)
+        if match:
+            transferred, total, files, errors = match.groups()
+            return {
+                "transferred": int(transferred),
+                "total": int(total),
+                "files": int(files),
+                "errors": int(errors)
+            }
+        return None
 
 
 class RcloneRunner:
@@ -230,20 +275,40 @@ class RcloneRunner:
                 event = self.parser.parse_line(line)
                 if event:
                     result.events.append(event)
+                    logger.debug(f"Created event: {event.action} for {event.file_path}")
                     
                     # Update counters
                     if event.action == "added":
                         result.num_added += 1
                         result.bytes_transferred += event.file_size
+                        logger.debug(f"Added file: {event.file_path} ({event.file_size} bytes)")
                     elif event.action == "updated":
                         result.num_updated += 1
                         result.bytes_transferred += event.file_size
+                        logger.debug(f"Updated file: {event.file_path} ({event.file_size} bytes)")
                     elif event.action == "error":
                         result.errors += 1
+                        logger.debug(f"Error with file: {event.file_path}")
                     elif event.action == "conflict":
                         # Handle conflict by renaming
                         self._handle_conflict(event)
                         result.errors += 1  # Count as error for tracking
+                        logger.debug(f"Conflict with file: {event.file_path}")
+                else:
+                    # Try to parse as stats line (fallback)
+                    stats = self.parser.parse_stats_line(line)
+                    if stats:
+                        logger.debug(f"Parsed stats: {stats}")
+                        # Update result with stats data
+                        result.num_added = stats.get("files", 0)
+                        result.bytes_transferred = stats.get("transferred", 0)
+                        result.errors = stats.get("errors", 0)
+                    else:
+                        # Log non-parsed lines for debugging
+                        if line.startswith('{') and ('file' in line or 'object' in line):
+                            logger.debug(f"Unparsed JSON line: {line[:100]}...")
+                        elif "Transferred:" in line:
+                            logger.debug(f"Unparsed stats line: {line}")
             
             # Wait for process completion
             return_code = process.wait()
@@ -257,6 +322,7 @@ class RcloneRunner:
                 result.status = "error"
             
             logger.info(f"rclone exited with code: {return_code}")
+            logger.info(f"Final result: {result.num_added} added, {result.num_updated} updated, {result.errors} errors, {result.bytes_transferred} bytes, {len(result.events)} events")
             
         except subprocess.SubprocessError as e:
             logger.error(f"rclone subprocess error: {e}")

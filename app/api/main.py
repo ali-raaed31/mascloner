@@ -731,6 +731,63 @@ async def reset_database(db: Session = Depends(get_db)):
         )
 
 
+@app.get("/debug/rclone-logs")
+async def debug_rclone_logs(limit: int = 50):
+    """Debug endpoint to show recent rclone log entries."""
+    try:
+        log_dir = Path("/srv/mascloner/logs")
+        log_files = list(log_dir.glob("sync-*.log"))
+        
+        if not log_files:
+            return {"message": "No sync log files found", "logs": []}
+        
+        # Get the most recent log file
+        latest_log = max(log_files, key=lambda f: f.stat().st_mtime)
+        
+        # Read last N lines
+        with open(latest_log, 'r') as f:
+            lines = f.readlines()
+            recent_lines = lines[-limit:] if len(lines) > limit else lines
+        
+        # Parse each line to see what we get
+        parsed_logs = []
+        for i, line in enumerate(recent_lines):
+            line = line.strip()
+            if not line:
+                continue
+                
+            try:
+                # Try to parse as JSON
+                obj = json.loads(line)
+                parsed_logs.append({
+                    "line_number": len(lines) - limit + i + 1,
+                    "raw": line,
+                    "parsed": obj,
+                    "type": "json"
+                })
+            except json.JSONDecodeError:
+                parsed_logs.append({
+                    "line_number": len(lines) - limit + i + 1,
+                    "raw": line,
+                    "parsed": None,
+                    "type": "text"
+                })
+        
+        return {
+            "log_file": str(latest_log),
+            "total_lines": len(lines),
+            "recent_lines": len(recent_lines),
+            "logs": parsed_logs
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug log reading failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read logs: {str(e)}"
+        )
+
+
 # Get all events
 @app.get("/events", response_model=List[FileEventResponse])
 async def get_events(limit: int = 200, db: Session = Depends(get_db)):

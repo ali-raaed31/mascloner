@@ -113,9 +113,9 @@ if config_status["all_configured"]:
         with col2:
             if gdrive_status.get("folders"):
                 st.info(f"**Accessible Folders**: {len(gdrive_status['folders'])} found")
-                with st.expander("📁 Sample folders"):
-                    for folder in gdrive_status["folders"][:5]:
-                        st.write(f"📁 {folder}")
+                st.write("**Sample folders:**")
+                for folder in gdrive_status["folders"][:5]:
+                    st.write(f"📁 {folder}")
     
     # Nextcloud status
     with st.expander("☁️ Nextcloud Configuration", expanded=True):
@@ -128,7 +128,7 @@ if config_status["all_configured"]:
         with col2:
             if st.button("🧪 Test Connection"):
                 with st.spinner("Testing Nextcloud..."):
-                    result = api.test_nextcloud()
+                    result = api.test_nextcloud("ncwebdav")
                     if result and result.get("success"):
                         st.success("✅ Connection OK")
                     else:
