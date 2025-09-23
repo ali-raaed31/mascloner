@@ -115,6 +115,10 @@ class APIClient:
         """Clean up old database records."""
         return self._make_request("POST", "/maintenance/cleanup", params={"keep_runs": keep_runs})
     
+    def reset_database(self) -> Optional[Dict[str, Any]]:
+        """Reset database by deleting all runs and file events."""
+        return self._make_request("POST", "/maintenance/reset")
+    
     def get_database_info(self) -> Optional[Dict[str, Any]]:
         """Get database information."""
         return self._make_request("GET", "/database/info")

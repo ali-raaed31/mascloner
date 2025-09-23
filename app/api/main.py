@@ -701,10 +701,11 @@ async def reset_database(db: Session = Depends(get_db)):
         events_count = db.execute(select(func.count(FileEvent.id))).scalar() or 0
         
         # Delete all file events first (due to foreign key constraint)
-        db.execute(select(FileEvent).delete())
+        from sqlalchemy import delete
+        db.execute(delete(FileEvent))
         
         # Delete all runs
-        db.execute(select(Run).delete())
+        db.execute(delete(Run))
         
         # Commit the changes
         db.commit()

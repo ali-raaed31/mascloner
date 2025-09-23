@@ -344,6 +344,66 @@ with tab3:
     
     st.markdown("---")
     
+    # Database reset
+    st.subheader("⚠️ Database Reset")
+    st.warning("**DANGER ZONE**: This will permanently delete ALL sync runs and file events!")
+    
+    with st.expander("🗑️ Reset All Data", expanded=False):
+        st.markdown("""
+        **What this does:**
+        - Deletes ALL sync run records
+        - Deletes ALL file event records  
+        - Clears the file tree completely
+        - Resets all sync history
+        
+        **What this does NOT affect:**
+        - Configuration settings (Google Drive, Nextcloud, sync paths)
+        - rclone remote configurations
+        - Log files
+        - Application settings
+        """)
+        
+        # Show current data counts
+        if db_info:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Runs to Delete", db_info.get("total_runs", 0))
+            with col2:
+                st.metric("Events to Delete", db_info.get("total_events", 0))
+        
+        # Confirmation steps
+        st.markdown("**To proceed, you must confirm both steps:**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            confirm_1 = st.checkbox("✅ I understand this will delete ALL sync data")
+        
+        with col2:
+            confirm_2 = st.checkbox("✅ I want to start completely fresh")
+        
+        if confirm_1 and confirm_2:
+            if st.button("🚨 RESET ALL DATA", type="secondary", use_container_width=True):
+                with st.spinner("Resetting database..."):
+                    result = api.reset_database()
+                    
+                    if result and result.get("success"):
+                        data = result.get("data", {})
+                        runs_deleted = data.get("runs_deleted", 0)
+                        events_deleted = data.get("events_deleted", 0)
+                        total_deleted = data.get("total_deleted", 0)
+                        
+                        st.success(f"✅ Database reset successfully!")
+                        st.info(f"**Deleted:** {runs_deleted} runs, {events_deleted} events ({total_deleted} total records)")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to reset database")
+        else:
+            st.info("Please confirm both checkboxes to enable reset button")
+    
+    st.markdown("---")
+    
     # System information
     st.subheader("ℹ️ System Information")
     

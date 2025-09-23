@@ -165,6 +165,22 @@ if config_status["all_configured"]:
             st.session_state.show_reset_options = True
             st.rerun()
     
+    # Quick database reset option
+    st.markdown("---")
+    st.subheader("🔄 Fresh Start Options")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🧹 Reset Sync Data Only", use_container_width=True):
+            st.session_state.show_data_reset = True
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Reset Everything", type="secondary", use_container_width=True):
+            st.session_state.show_full_reset = True
+            st.rerun()
+    
     # Reset confirmation
     if st.session_state.get("show_reset_options", False):
         st.markdown("---")
@@ -218,6 +234,73 @@ if config_status["all_configured"]:
                     if st.button("❌ Cancel Reset", use_container_width=True):
                         st.session_state.show_reset_options = False
                         st.rerun()
+    
+    # Data reset confirmation
+    if st.session_state.get("show_data_reset", False):
+        st.markdown("---")
+        st.warning("⚠️ **Reset Sync Data Only**")
+        st.markdown("This will clear all sync runs and file events but keep your configuration.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Confirm Data Reset", type="secondary", use_container_width=True):
+                with st.spinner("Resetting sync data..."):
+                    result = api.reset_database()
+                    if result and result.get("success"):
+                        data = result.get("data", {})
+                        st.success(f"✅ Reset {data.get('total_deleted', 0)} records!")
+                        st.session_state.show_data_reset = False
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to reset data")
+        
+        with col2:
+            if st.button("❌ Cancel", use_container_width=True):
+                st.session_state.show_data_reset = False
+                st.rerun()
+    
+    # Full reset confirmation
+    if st.session_state.get("show_full_reset", False):
+        st.markdown("---")
+        st.error("🚨 **Reset Everything**")
+        st.markdown("This will clear ALL data AND reset all configurations. You'll need to set up everything again.")
+        
+        confirm_full = st.checkbox("✅ I understand this will delete everything and I'll need to reconfigure")
+        
+        if confirm_full:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🚨 CONFIRM FULL RESET", type="secondary", use_container_width=True):
+                    with st.spinner("Resetting everything..."):
+                        # Reset database first
+                        db_result = api.reset_database()
+                        
+                        # Reset Google Drive config
+                        gdrive_result = api.remove_google_drive_config()
+                        
+                        # Clear sync configuration
+                        clear_config = {
+                            "gdrive_remote": "",
+                            "gdrive_src": "",
+                            "nc_remote": "",
+                            "nc_dest_path": ""
+                        }
+                        config_result = api.update_config(clear_config)
+                        
+                        if db_result and db_result.get("success"):
+                            st.success("✅ Full reset completed!")
+                            st.info("🔄 Please refresh the page to start the setup wizard")
+                            st.session_state.show_full_reset = False
+                            st.rerun()
+                        else:
+                            st.error("❌ Reset failed")
+            
+            with col2:
+                if st.button("❌ Cancel", use_container_width=True):
+                    st.session_state.show_full_reset = False
+                    st.rerun()
+        else:
+            st.info("Please confirm to enable reset button")
 
 else:
     # Show setup wizard for missing configurations
