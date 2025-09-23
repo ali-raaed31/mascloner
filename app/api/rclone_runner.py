@@ -51,7 +51,7 @@ class RcloneLogParser:
     
     # Map rclone log messages to our action types based on official rclone JSON log format
     ACTION_MAP = {
-        # Official rclone JSON log message patterns
+        # Official rclone JSON log message patterns (exact matches)
         "Copied (new)": "added",
         "Copied (replaced)": "updated", 
         "Copied": "added",  # Generic copy
@@ -266,65 +266,7 @@ class RcloneRunner:
                 universal_newlines=True
             )
             
-            # Parse output in real-time
-            for line in process.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Parse JSON log line
-                event = self.parser.parse_line(line)
-                if event:
-                    result.events.append(event)
-                    logger.debug(f"Created event: {event.action} for {event.file_path}")
-                    
-                    # Update counters
-                    if event.action == "added":
-                        result.num_added += 1
-                        result.bytes_transferred += event.file_size
-                        logger.debug(f"Added file: {event.file_path} ({event.file_size} bytes)")
-                    elif event.action == "updated":
-                        result.num_updated += 1
-                        result.bytes_transferred += event.file_size
-                        logger.debug(f"Updated file: {event.file_path} ({event.file_size} bytes)")
-                    elif event.action == "error":
-                        result.errors += 1
-                        logger.debug(f"Error with file: {event.file_path}")
-                    elif event.action == "conflict":
-                        # Handle conflict by renaming
-                        self._handle_conflict(event)
-                        result.errors += 1  # Count as error for tracking
-                        logger.debug(f"Conflict with file: {event.file_path}")
-                else:
-                    # Try to parse as stats line (fallback)
-                    stats = self.parser.parse_stats_line(line)
-                    if stats:
-                        logger.debug(f"Parsed stats: {stats}")
-                        # Update result with stats data
-                        result.num_added = stats.get("files", 0)
-                        result.bytes_transferred = stats.get("transferred", 0)
-                        result.errors = stats.get("errors", 0)
-                        
-                        # Create a generic file event for stats-based sync
-                        if stats.get("files", 0) > 0:
-                            generic_event = SyncEvent(
-                                timestamp=datetime.utcnow(),
-                                action="added",  # Assume all files are new for stats
-                                file_path="<stats-based-sync>",
-                                file_size=stats.get("transferred", 0),
-                                message=f"Stats: {stats.get('files', 0)} files, {stats.get('transferred', 0)} bytes",
-                                file_hash=None
-                            )
-                            result.events.append(generic_event)
-                            logger.debug(f"Created stats-based event: {stats.get('files', 0)} files")
-                    else:
-                        # Log non-parsed lines for debugging
-                        if line.startswith('{') and ('file' in line or 'object' in line):
-                            logger.debug(f"Unparsed JSON line: {line[:100]}...")
-                        elif "Transferred:" in line:
-                            logger.debug(f"Unparsed stats line: {line}")
-            
-            # Wait for process completion
+            # Wait for process completion first
             return_code = process.wait()
             
             # Determine final status
@@ -336,6 +278,70 @@ class RcloneRunner:
                 result.status = "error"
             
             logger.info(f"rclone exited with code: {return_code}")
+            
+            # Now parse the log file that rclone created
+            if os.path.exists(log_file):
+                logger.info(f"Parsing log file: {log_file}")
+                with open(log_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Parse JSON log line
+                        event = self.parser.parse_line(line)
+                        if event:
+                            result.events.append(event)
+                            logger.debug(f"Created event: {event.action} for {event.file_path}")
+                            
+                            # Update counters
+                            if event.action == "added":
+                                result.num_added += 1
+                                result.bytes_transferred += event.file_size
+                                logger.debug(f"Added file: {event.file_path} ({event.file_size} bytes)")
+                            elif event.action == "updated":
+                                result.num_updated += 1
+                                result.bytes_transferred += event.file_size
+                                logger.debug(f"Updated file: {event.file_path} ({event.file_size} bytes)")
+                            elif event.action == "error":
+                                result.errors += 1
+                                logger.debug(f"Error with file: {event.file_path}")
+                            elif event.action == "conflict":
+                                # Handle conflict by renaming
+                                self._handle_conflict(event)
+                                result.errors += 1  # Count as error for tracking
+                                logger.debug(f"Conflict with file: {event.file_path}")
+                        else:
+                            # Try to parse as stats line (fallback)
+                            stats = self.parser.parse_stats_line(line)
+                            if stats:
+                                logger.debug(f"Parsed stats: {stats}")
+                                # Update result with stats data
+                                result.num_added = stats.get("files", 0)
+                                result.bytes_transferred = stats.get("transferred", 0)
+                                result.errors = stats.get("errors", 0)
+                                
+                                # Create a generic file event for stats-based sync
+                                if stats.get("files", 0) > 0:
+                                    generic_event = SyncEvent(
+                                        timestamp=datetime.utcnow(),
+                                        action="added",  # Assume all files are new for stats
+                                        file_path="<stats-based-sync>",
+                                        file_size=stats.get("transferred", 0),
+                                        message=f"Stats: {stats.get('files', 0)} files, {stats.get('transferred', 0)} bytes",
+                                        file_hash=None
+                                    )
+                                    result.events.append(generic_event)
+                                    logger.debug(f"Created stats-based event: {stats.get('files', 0)} files")
+                            else:
+                                # Log non-parsed lines for debugging
+                                if line.startswith('{') and ('file' in line or 'object' in line):
+                                    logger.debug(f"Unparsed JSON line: {line[:100]}...")
+                                elif "Transferred:" in line:
+                                    logger.debug(f"Unparsed stats line: {line}")
+            else:
+                logger.warning(f"Log file not found: {log_file}")
+            
             logger.info(f"Final result: {result.num_added} added, {result.num_updated} updated, {result.errors} errors, {result.bytes_transferred} bytes, {len(result.events)} events")
             
         except subprocess.SubprocessError as e:

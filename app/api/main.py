@@ -735,6 +735,7 @@ async def reset_database(db: Session = Depends(get_db)):
 async def debug_rclone_logs(limit: int = 50):
     """Debug endpoint to show recent rclone log entries."""
     try:
+        from pathlib import Path
         log_dir = Path("/srv/mascloner/logs")
         log_files = list(log_dir.glob("sync-*.log"))
         
