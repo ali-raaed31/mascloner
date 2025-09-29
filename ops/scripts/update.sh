@@ -43,6 +43,75 @@ check_prerequisites() {
     echo_success "Prerequisites check passed"
 }
 
+check_for_updates() {
+    echo_info "Checking for updates from repository..."
+    
+    # Create temporary directory for comparison
+    local temp_check_dir="/tmp/mascloner-check-$$"
+    local has_changes=false
+    
+    # Clone the repository quietly to check for changes
+    echo_info "Fetching latest version from GitHub..."
+    if ! git clone --quiet --depth 1 "$GIT_REPO" "$temp_check_dir" 2>/dev/null; then
+        echo_error "Failed to fetch repository for comparison"
+        echo_warning "Proceeding with update anyway (network issue or repo unavailable)"
+        rm -rf "$temp_check_dir"
+        return 0  # Continue with update
+    fi
+    
+    echo_info "Comparing with current installation..."
+    
+    # Compare critical directories: app/ and ops/
+    local changed_files=0
+    
+    # Check if app/ directory has changes
+    if [[ -d "$INSTALL_DIR/app" ]] && [[ -d "$temp_check_dir/app" ]]; then
+        # Use diff to check for differences (ignore whitespace, show summary)
+        if ! diff -rq --brief "$INSTALL_DIR/app" "$temp_check_dir/app" >/dev/null 2>&1; then
+            changed_files=$((changed_files + 1))
+            has_changes=true
+        fi
+    else
+        # Directory structure changed
+        has_changes=true
+    fi
+    
+    # Check if ops/ directory has changes
+    if [[ -d "$INSTALL_DIR/ops" ]] && [[ -d "$temp_check_dir/ops" ]]; then
+        if ! diff -rq --brief "$INSTALL_DIR/ops" "$temp_check_dir/ops" >/dev/null 2>&1; then
+            changed_files=$((changed_files + 1))
+            has_changes=true
+        fi
+    else
+        has_changes=true
+    fi
+    
+    # Check if requirements.txt changed
+    if [[ -f "$INSTALL_DIR/requirements.txt" ]] && [[ -f "$temp_check_dir/requirements.txt" ]]; then
+        if ! diff -q "$INSTALL_DIR/requirements.txt" "$temp_check_dir/requirements.txt" >/dev/null 2>&1; then
+            changed_files=$((changed_files + 1))
+            has_changes=true
+        fi
+    else
+        has_changes=true
+    fi
+    
+    # Cleanup
+    rm -rf "$temp_check_dir"
+    
+    # Report results
+    if [[ "$has_changes" == true ]]; then
+        echo_success "✨ Updates available! Changes detected in repository."
+        echo_info "The update will proceed..."
+        return 0  # Continue with update
+    else
+        echo_success "✅ Already up to date! No changes detected."
+        echo_info "Your installation matches the latest version from GitHub."
+        echo_info "Skipping update process."
+        return 1  # Skip update
+    fi
+}
+
 create_backup() {
     echo_info "Creating backup before update..."
     
@@ -492,6 +561,17 @@ main() {
     fi
     
     check_prerequisites
+    
+    # Check if updates are available
+    if ! check_for_updates; then
+        echo
+        echo_success "No update needed! 🎉"
+        echo_info "Your MasCloner installation is already running the latest version."
+        exit 0
+    fi
+    
+    # Proceed with update
+    echo
     create_backup
     capture_file_list
     stop_services
