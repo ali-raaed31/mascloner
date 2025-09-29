@@ -431,8 +431,9 @@ async def get_status(db: Session = Depends(get_db)):
         except Exception as e:
             logger.warning(f"Failed to check rclone remotes: {e}")
         
-        # Check configuration validity
-        sync_config = config.get_sync_config()
+        # Check configuration validity (load from database, not just env)
+        from .scheduler import get_sync_config_from_db
+        sync_config = get_sync_config_from_db(db)
         config_valid = bool(
             sync_config.get("gdrive_remote") and 
             sync_config.get("gdrive_src") and 
