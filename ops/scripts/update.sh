@@ -61,13 +61,17 @@ check_for_updates() {
     
     echo_info "Comparing with current installation..."
     
-    # Compare critical directories: app/ and ops/
+    # Compare critical directories: app/ and ops/ (excluding __pycache__, .pyc, etc.)
     local changed_files=0
     
     # Check if app/ directory has changes
     if [[ -d "$INSTALL_DIR/app" ]] && [[ -d "$temp_check_dir/app" ]]; then
-        # Use diff to check for differences (ignore whitespace, show summary)
-        if ! diff -rq --brief "$INSTALL_DIR/app" "$temp_check_dir/app" >/dev/null 2>&1; then
+        # Use diff excluding __pycache__ and compiled Python files
+        if ! diff -rq --brief \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            "$INSTALL_DIR/app" "$temp_check_dir/app" >/dev/null 2>&1; then
             changed_files=$((changed_files + 1))
             has_changes=true
         fi
@@ -78,7 +82,11 @@ check_for_updates() {
     
     # Check if ops/ directory has changes
     if [[ -d "$INSTALL_DIR/ops" ]] && [[ -d "$temp_check_dir/ops" ]]; then
-        if ! diff -rq --brief "$INSTALL_DIR/ops" "$temp_check_dir/ops" >/dev/null 2>&1; then
+        if ! diff -rq --brief \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            "$INSTALL_DIR/ops" "$temp_check_dir/ops" >/dev/null 2>&1; then
             changed_files=$((changed_files + 1))
             has_changes=true
         fi
@@ -149,9 +157,13 @@ create_backup() {
 capture_file_list() {
     echo_info "Capturing current file list for comparison..."
     
-    # Create a manifest of current files (relative paths, exclude venv and logs)
+    # Create a manifest of current files (exclude __pycache__, .pyc, logs)
     cd "$INSTALL_DIR"
-    find app/ ops/ -type f 2>/dev/null | sort > "/tmp/mascloner-files-before-$$"
+    find app/ ops/ -type f \
+        ! -path '*/__pycache__/*' \
+        ! -name '*.pyc' \
+        ! -name '*.pyo' \
+        2>/dev/null | sort > "/tmp/mascloner-files-before-$$"
     
     echo_info "Captured $(wc -l < /tmp/mascloner-files-before-$$) files"
 }
@@ -275,9 +287,13 @@ update_code() {
     # Cleanup
     rm -rf "$temp_dir" "$backup_temp"
     
-    # Capture new file list for comparison
+    # Capture new file list for comparison (exclude __pycache__)
     cd "$INSTALL_DIR"
-    find app/ ops/ -type f 2>/dev/null | sort > "/tmp/mascloner-files-after-$$"
+    find app/ ops/ -type f \
+        ! -path '*/__pycache__/*' \
+        ! -name '*.pyc' \
+        ! -name '*.pyo' \
+        2>/dev/null | sort > "/tmp/mascloner-files-after-$$"
     
     echo_success "Code updated successfully"
     cd "$current_dir"
