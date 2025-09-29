@@ -167,20 +167,29 @@ check_filesystem() {
 check_network() {
     echo_info "Checking network connectivity..."
     
-    # Check internet connectivity
-    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-        echo_ok "Internet connectivity available"
+    # Check internet connectivity (non-critical - many VMs block ping)
+    if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        echo_ok "Internet connectivity available (ICMP)"
     else
-        echo_error "No internet connectivity"
-        ((ISSUES++))
+        # Try alternate check using curl to a reliable endpoint
+        if curl -s -f --max-time 5 "https://www.google.com" >/dev/null 2>&1; then
+            echo_ok "Internet connectivity available (HTTP)"
+        else
+            echo_warning "No internet connectivity detected (ping/curl failed)"
+            echo_info "This may be normal if ping is blocked or network is restricted"
+            echo_info "MasCloner can still function if services are running"
+            # Don't increment ISSUES - this is not critical for operation
+        fi
     fi
     
     # Check Cloudflare connectivity
     if command -v cloudflared >/dev/null; then
-        if ping -c 1 cftunnel.com >/dev/null 2>&1; then
+        if ping -c 1 -W 2 cftunnel.com >/dev/null 2>&1; then
             echo_ok "Cloudflare connectivity available"
+        elif curl -s -f --max-time 5 "https://cftunnel.com" >/dev/null 2>&1; then
+            echo_ok "Cloudflare connectivity available (HTTP)"
         else
-            echo_warning "Cloudflare connectivity issues"
+            echo_warning "Cloudflare connectivity issues (tunnel may still work)"
         fi
     fi
 }

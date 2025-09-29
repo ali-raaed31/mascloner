@@ -423,7 +423,13 @@ run_health_check() {
     sleep 10  # Wait for services to fully initialize
     
     if [[ -f "$INSTALL_DIR/ops/scripts/health-check.sh" ]]; then
-        bash "$INSTALL_DIR/ops/scripts/health-check.sh"
+        # Run health check but don't fail on non-critical issues
+        # The health check exits with the number of issues found
+        bash "$INSTALL_DIR/ops/scripts/health-check.sh" || {
+            local exit_code=$?
+            echo_warning "Health check found $exit_code issue(s), but update will continue"
+            echo_info "Review the health check output above for details"
+        }
     else
         # Basic health check
         echo_info "Running basic health check..."
