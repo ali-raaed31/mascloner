@@ -3,6 +3,7 @@
 import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -611,20 +612,38 @@ async def update_config(config_request: ConfigRequest, db: Session = Depends(get
 
 # Schedule endpoints
 @app.get("/schedule", response_model=Dict[str, Any])
-async def get_schedule():
+async def get_schedule(db: Session = Depends(get_db)):
     """Get current sync schedule."""
     try:
+        # Get interval settings from database
+        interval_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "interval_min")
+        ).scalar_one_or_none()
+        
+        jitter_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "jitter_sec")
+        ).scalar_one_or_none()
+        
+        # Default values if not in database
+        interval_min = int(interval_config.value) if interval_config else 5
+        jitter_sec = int(jitter_config.value) if jitter_config else 20
+        
+        # Get scheduler job info
         scheduler = get_scheduler()
         job_info = scheduler.get_job_info()
         
         if job_info:
             return {
+                "interval_min": interval_min,
+                "jitter_sec": jitter_sec,
                 "interval": job_info.get("trigger", "Unknown"),
                 "next_run": job_info.get("next_run_time"),
                 "active": True
             }
         else:
             return {
+                "interval_min": interval_min,
+                "jitter_sec": jitter_sec,
                 "interval": None,
                 "next_run": None,
                 "active": False
@@ -639,23 +658,55 @@ async def get_schedule():
 
 
 @app.post("/schedule", response_model=ApiResponse)
-async def update_schedule(schedule_request: ScheduleRequest):
+async def update_schedule(schedule_request: ScheduleRequest, db: Session = Depends(get_db)):
     """Update sync schedule."""
     try:
-        scheduler = get_scheduler()
+        # Save interval settings to database
+        interval_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "interval_min")
+        ).scalar_one_or_none()
         
+        if interval_config:
+            interval_config.value = str(schedule_request.interval_min)
+            interval_config.updated_at = datetime.utcnow()
+        else:
+            interval_config = ConfigKV(
+                key="interval_min",
+                value=str(schedule_request.interval_min)
+            )
+            db.add(interval_config)
+        
+        jitter_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "jitter_sec")
+        ).scalar_one_or_none()
+        
+        if jitter_config:
+            jitter_config.value = str(schedule_request.jitter_sec)
+            jitter_config.updated_at = datetime.utcnow()
+        else:
+            jitter_config = ConfigKV(
+                key="jitter_sec",
+                value=str(schedule_request.jitter_sec)
+            )
+            db.add(jitter_config)
+        
+        db.commit()
+        
+        # Update scheduler job
+        scheduler = get_scheduler()
         success = scheduler.add_sync_job(
             interval_minutes=schedule_request.interval_min,
             jitter_seconds=schedule_request.jitter_sec
         )
         
         if success:
-            logger.info(f"Schedule updated: {schedule_request.interval_min}min interval")
+            logger.info(f"Schedule updated: {schedule_request.interval_min}min interval (saved to database)")
             return ApiResponse(
                 success=True,
                 message=f"Schedule updated to {schedule_request.interval_min} minutes"
             )
         else:
+            db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update schedule"
@@ -665,9 +716,82 @@ async def update_schedule(schedule_request: ScheduleRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to update schedule: {e}")
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update schedule: {str(e)}"
+        )
+
+
+@app.post("/schedule/start", response_model=ApiResponse)
+async def start_scheduler_endpoint(db: Session = Depends(get_db)):
+    """Start the scheduler."""
+    try:
+        # Get interval settings from database
+        interval_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "interval_min")
+        ).scalar_one_or_none()
+        
+        jitter_config = db.execute(
+            select(ConfigKV).where(ConfigKV.key == "jitter_sec")
+        ).scalar_one_or_none()
+        
+        # Use database values or defaults
+        interval_min = int(interval_config.value) if interval_config else 5
+        jitter_sec = int(jitter_config.value) if jitter_config else 20
+        
+        # Start scheduler with saved settings
+        from .scheduler import start_scheduler
+        success = start_scheduler(interval_minutes=interval_min, jitter_seconds=jitter_sec)
+        
+        if success:
+            logger.info(f"Scheduler started via API with {interval_min}min interval")
+            return ApiResponse(
+                success=True,
+                message="Scheduler started successfully"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to start scheduler"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start scheduler: {str(e)}"
+        )
+
+
+@app.post("/schedule/stop", response_model=ApiResponse)
+async def stop_scheduler_endpoint():
+    """Stop the scheduler."""
+    try:
+        from .scheduler import stop_scheduler
+        success = stop_scheduler()
+        
+        if success:
+            logger.info("Scheduler stopped via API")
+            return ApiResponse(
+                success=True,
+                message="Scheduler stopped successfully"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to stop scheduler"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stop scheduler: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to stop scheduler: {str(e)}"
         )
 
 

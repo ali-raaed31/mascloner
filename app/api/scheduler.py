@@ -320,14 +320,42 @@ def get_scheduler() -> SyncScheduler:
 def start_scheduler(interval_minutes: Optional[int] = None, jitter_seconds: Optional[int] = None) -> bool:
     """Start the scheduler with configuration from environment/database."""
     try:
-        # Use provided values or defaults from config
-        if config:
-            scheduler_config = config.get_scheduler_config()
-            interval = interval_minutes or scheduler_config["interval_min"]
-            jitter = jitter_seconds or scheduler_config["jitter_sec"]
+        # If no explicit values provided, try to load from database first
+        if interval_minutes is None or jitter_seconds is None:
+            try:
+                db = get_db_session()
+                
+                # Try to load from database
+                interval_config = db.execute(
+                    select(ConfigKV).where(ConfigKV.key == "interval_min")
+                ).scalar_one_or_none()
+                
+                jitter_config = db.execute(
+                    select(ConfigKV).where(ConfigKV.key == "jitter_sec")
+                ).scalar_one_or_none()
+                
+                # Use database values if available
+                interval = interval_minutes or (int(interval_config.value) if interval_config else None)
+                jitter = jitter_seconds or (int(jitter_config.value) if jitter_config else None)
+                
+                db.close()
+            except Exception as e:
+                logger.warning(f"Could not load schedule from database: {e}")
+                interval = interval_minutes
+                jitter = jitter_seconds
         else:
-            interval = interval_minutes or 5
-            jitter = jitter_seconds or 20
+            interval = interval_minutes
+            jitter = jitter_seconds
+        
+        # Fall back to config/environment defaults if still None
+        if interval is None or jitter is None:
+            if config:
+                scheduler_config = config.get_scheduler_config()
+                interval = interval or scheduler_config["interval_min"]
+                jitter = jitter or scheduler_config["jitter_sec"]
+            else:
+                interval = interval or 5
+                jitter = jitter or 20
         
         # Start scheduler
         sync_scheduler.start()

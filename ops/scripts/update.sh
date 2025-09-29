@@ -5,10 +5,10 @@ set -euo pipefail
 # Safely updates MasCloner to the latest version
 
 # Configuration
-INSTALL_DIR="/srv/mascloner"
-MASCLONER_USER="mascloner"
-BACKUP_DIR="/var/backups/mascloner"
-GIT_REPO="https://github.com/ali-raaed31/mascloner.git"
+INSTALL_DIR="${INSTALL_DIR:-/srv/mascloner}"
+MASCLONER_USER="${MASCLONER_USER:-mascloner}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/mascloner}"
+GIT_REPO="${GIT_REPO:-https://github.com/ali-raaed31/mascloner.git}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -48,39 +48,81 @@ create_backup() {
     
     # Run backup script if available
     if [[ -f "$INSTALL_DIR/ops/scripts/backup.sh" ]]; then
-        bash "$INSTALL_DIR/ops/scripts/backup.sh"
+        if bash "$INSTALL_DIR/ops/scripts/backup.sh"; then
+            echo_success "Backup created via backup.sh"
+        else
+            echo_error "Backup script failed"
+            exit 1
+        fi
     else
         # Manual backup
         local backup_name="mascloner_pre_update_$(date +%Y%m%d_%H%M%S)"
         mkdir -p "$BACKUP_DIR"
         
         cd "$INSTALL_DIR"
-        tar -czf "$BACKUP_DIR/$backup_name.tar.gz" \
+        if tar -czf "$BACKUP_DIR/$backup_name.tar.gz" \
             --exclude='.venv' \
             --exclude='logs/*.log' \
             --exclude='__pycache__' \
-            data/ etc/ .env app/ requirements.txt
-        
-        echo_success "Backup created: $backup_name.tar.gz"
+            data/ etc/ .env app/ requirements.txt 2>/dev/null; then
+            
+            echo_success "Backup created: $BACKUP_DIR/$backup_name.tar.gz"
+            
+            # Export backup location for use in error messages
+            export LAST_BACKUP="$BACKUP_DIR/$backup_name.tar.gz"
+        else
+            echo_error "Failed to create backup"
+            exit 1
+        fi
     fi
+}
+
+capture_file_list() {
+    echo_info "Capturing current file list for comparison..."
+    
+    # Create a manifest of current files (relative paths, exclude venv and logs)
+    cd "$INSTALL_DIR"
+    find app/ ops/ -type f 2>/dev/null | sort > "/tmp/mascloner-files-before-$$"
+    
+    echo_info "Captured $(wc -l < /tmp/mascloner-files-before-$$) files"
 }
 
 stop_services() {
     echo_info "Stopping MasCloner services..."
     
     local services=("mascloner-tunnel" "mascloner-ui" "mascloner-api")
+    local failed_to_stop=()
     
     for service in "${services[@]}"; do
-        if sudo systemctl is-active --quiet "$service.service"; then
-            sudo systemctl stop "$service.service"
-            echo_info "Stopped $service service"
+        # Check if service file exists
+        if [[ -f "/etc/systemd/system/$service.service" ]]; then
+            if systemctl is-active --quiet "$service.service"; then
+                systemctl stop "$service.service"
+                echo_info "Stopped $service service"
+                
+                # Verify it stopped
+                sleep 2
+                if systemctl is-active --quiet "$service.service"; then
+                    echo_warning "$service service did not stop cleanly"
+                    failed_to_stop+=("$service")
+                fi
+            else
+                echo_info "$service service already stopped"
+            fi
+        else
+            echo_info "$service service not installed, skipping"
         fi
     done
     
     # Wait for services to fully stop
-    sleep 5
+    sleep 3
     
-    echo_success "All services stopped"
+    if [[ ${#failed_to_stop[@]} -gt 0 ]]; then
+        echo_warning "Some services failed to stop: ${failed_to_stop[*]}"
+        echo_warning "Proceeding with update anyway..."
+    else
+        echo_success "All services stopped"
+    fi
 }
 
 update_code() {
@@ -94,10 +136,9 @@ update_code() {
     local temp_dir="/tmp/mascloner-update-$$"
     
     echo_info "Cloning latest code from repository..."
-    git clone "$GIT_REPO" "$temp_dir"
-    
-    if [[ $? -ne 0 ]]; then
-        echo_error "Failed to clone repository"
+    if ! git clone "$GIT_REPO" "$temp_dir" 2>&1; then
+        echo_error "Failed to clone repository from $GIT_REPO"
+        echo_error "Check network connectivity and repository URL"
         rm -rf "$temp_dir"
         exit 1
     fi
@@ -165,6 +206,10 @@ update_code() {
     # Cleanup
     rm -rf "$temp_dir" "$backup_temp"
     
+    # Capture new file list for comparison
+    cd "$INSTALL_DIR"
+    find app/ ops/ -type f 2>/dev/null | sort > "/tmp/mascloner-files-after-$$"
+    
     echo_success "Code updated successfully"
     cd "$current_dir"
 }
@@ -172,11 +217,30 @@ update_code() {
 update_dependencies() {
     echo_info "Updating Python dependencies..."
     
+    # Check if virtual environment exists
+    if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
+        echo_error "Virtual environment not found at $INSTALL_DIR/.venv"
+        echo_error "This should not happen. Installation may be corrupted."
+        exit 1
+    fi
+    
+    # Check if requirements.txt exists
+    if [[ ! -f "$INSTALL_DIR/requirements.txt" ]]; then
+        echo_error "requirements.txt not found"
+        exit 1
+    fi
+    
     # Update pip
     sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip
     
     # Update dependencies
     sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --upgrade
+    
+    if [[ $? -ne 0 ]]; then
+        echo_error "Failed to update dependencies"
+        echo_error "You may need to restore from backup"
+        exit 1
+    fi
     
     echo_success "Dependencies updated"
 }
@@ -248,28 +312,40 @@ start_services() {
     
     # Start services in dependency order: API first, then UI, then tunnel
     local services=("mascloner-api" "mascloner-ui" "mascloner-tunnel")
+    local failed_services=()
     
     for service in "${services[@]}"; do
-        if sudo systemctl is-enabled --quiet "$service.service"; then
-            echo_info "Starting $service service..."
-            sudo systemctl start "$service.service"
-            
-            # Wait and check if service started successfully
-            sleep 5
-            if sudo systemctl is-active --quiet "$service.service"; then
-                echo_success "Started $service service"
+        # Check if service file exists and is enabled
+        if [[ -f "/etc/systemd/system/$service.service" ]]; then
+            if systemctl is-enabled --quiet "$service.service" 2>/dev/null; then
+                echo_info "Starting $service service..."
+                systemctl start "$service.service"
+                
+                # Wait and check if service started successfully
+                sleep 5
+                if systemctl is-active --quiet "$service.service"; then
+                    echo_success "Started $service service"
+                else
+                    echo_error "Failed to start $service service"
+                    echo_error "Service logs:"
+                    journalctl -u "$service.service" --no-pager -l --since "5 minutes ago" | tail -20
+                    failed_services+=("$service")
+                fi
             else
-                echo_error "Failed to start $service service"
-                echo_error "Service logs:"
-                journalctl -u "$service.service" --no-pager -l --since "5 minutes ago"
-                return 1
+                echo_info "$service service not enabled, skipping"
             fi
         else
-            echo_info "$service service not enabled, skipping"
+            echo_info "$service service file not found, skipping"
         fi
     done
     
-    echo_success "All services started successfully"
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+        echo_error "Failed to start: ${failed_services[*]}"
+        echo_error "Check logs with: journalctl -u <service-name> --since '10 minutes ago'"
+        return 1
+    else
+        echo_success "All services started successfully"
+    fi
 }
 
 run_health_check() {
@@ -283,39 +359,86 @@ run_health_check() {
         # Basic health check
         echo_info "Running basic health check..."
         
-        if curl -s -f "http://127.0.0.1:8787/health" >/dev/null; then
+        if curl -s -f --max-time 10 "http://127.0.0.1:8787/health" >/dev/null; then
             echo_success "API is responding"
         else
             echo_error "API is not responding"
         fi
         
-        if curl -s -f "http://127.0.0.1:8501" >/dev/null; then
+        if curl -s -f --max-time 10 "http://127.0.0.1:8501" >/dev/null; then
             echo_success "UI is responding"
         else
             echo_error "UI is not responding"
         fi
         
         # Test new debug endpoints
-        if curl -s -f "http://127.0.0.1:8787/debug/database" >/dev/null; then
+        if curl -s -f --max-time 10 "http://127.0.0.1:8787/debug/database" >/dev/null; then
             echo_success "Debug endpoints are working"
         else
             echo_warning "Debug endpoints may not be available"
         fi
         
         # Test database connectivity
-        if curl -s -f "http://127.0.0.1:8787/status" | grep -q "config_valid"; then
+        if curl -s -f --max-time 10 "http://127.0.0.1:8787/status" | grep -q "config_valid"; then
             echo_success "Database connectivity confirmed"
         else
             echo_warning "Database connectivity may have issues"
         fi
         
         # Test file tree endpoint
-        if curl -s -f "http://127.0.0.1:8787/tree" >/dev/null; then
+        if curl -s -f --max-time 10 "http://127.0.0.1:8787/tree" >/dev/null; then
             echo_success "File tree endpoint is working"
         else
             echo_warning "File tree endpoint may have issues"
         fi
+        
+        # Test scheduler control endpoints (NEW)
+        if curl -s -f --max-time 10 "http://127.0.0.1:8787/schedule" >/dev/null; then
+            echo_success "Scheduler endpoints are working"
+        else
+            echo_warning "Scheduler endpoints may have issues"
+        fi
     fi
+}
+
+show_file_changes() {
+    echo_info "Showing updated files..."
+    
+    # Check if we saved the file manifest
+    if [[ -f "/tmp/mascloner-files-before-$$" ]] && [[ -f "/tmp/mascloner-files-after-$$" ]]; then
+        echo
+        echo_info "=== FILES CHANGED OR ADDED ==="
+        
+        # Show files that were added
+        local added_files
+        added_files=$(comm -13 <(sort "/tmp/mascloner-files-before-$$") <(sort "/tmp/mascloner-files-after-$$") | head -20)
+        
+        if [[ -n "$added_files" ]]; then
+            echo_success "New or modified files (showing first 20):"
+            echo "$added_files" | while read -r file; do
+                echo "  + $file"
+            done
+        fi
+        
+        # Show files that were removed
+        local removed_files
+        removed_files=$(comm -23 <(sort "/tmp/mascloner-files-before-$$") <(sort "/tmp/mascloner-files-after-$$") | head -10)
+        
+        if [[ -n "$removed_files" ]]; then
+            echo
+            echo_warning "Removed files (showing first 10):"
+            echo "$removed_files" | while read -r file; do
+                echo "  - $file"
+            done
+        fi
+        
+        # Cleanup temp files
+        rm -f "/tmp/mascloner-files-before-$$" "/tmp/mascloner-files-after-$$"
+    else
+        echo_info "File change tracking not available"
+    fi
+    
+    echo
 }
 
 show_changelog() {
@@ -370,6 +493,7 @@ main() {
     
     check_prerequisites
     create_backup
+    capture_file_list
     stop_services
     update_code
     update_dependencies
@@ -378,6 +502,7 @@ main() {
     update_configuration
     start_services
     run_health_check
+    show_file_changes
     show_changelog
     print_completion
     
@@ -386,7 +511,18 @@ main() {
 }
 
 # Handle script interruption
-trap 'echo_error "Update interrupted"; exit 1' INT TERM
+cleanup_on_error() {
+    echo_error "Update interrupted or failed"
+    if [[ -n "$LAST_BACKUP" ]]; then
+        echo_warning "To restore from backup:"
+        echo "  sudo systemctl stop mascloner-api mascloner-ui mascloner-tunnel"
+        echo "  sudo tar -xzf $LAST_BACKUP -C $INSTALL_DIR"
+        echo "  sudo systemctl start mascloner-api mascloner-ui mascloner-tunnel"
+    fi
+    exit 1
+}
+
+trap cleanup_on_error INT TERM ERR
 
 # Run main update
 main "$@"
