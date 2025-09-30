@@ -272,7 +272,6 @@ def main(
 
             # Step 9: Start services
             with step_context(layout, current_step):
-                time.sleep(2)
                 services_started = start_all_services(layout)
 
             failed_services = [name for name, status, _ in services_started if status != "active"]
@@ -282,7 +281,7 @@ def main(
 
             # Step 10: Health check
             with step_context(layout, current_step):
-                time.sleep(5)
+                time.sleep(2)
                 health_checks = run_health_checks(layout)
 
             failed_checks = [name for name, passed, _ in health_checks if not passed]
@@ -489,7 +488,7 @@ def start_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str,
 
     for service in services:
         success = start_service(service)
-        time.sleep(2)
+        time.sleep(0.5)
         is_running, status = check_systemd_service(service)
         action = "started" if is_running else "failed"
         results.append((service, status, action))
