@@ -63,9 +63,9 @@ echo
 # Install dependencies if needed
 echo_info "Checking CLI dependencies..."
 
-if ! "$INSTALL_DIR/.venv/bin/python" -c "import rich" 2>/dev/null; then
-    echo_info "Installing Rich and Typer..."
-    sudo -u mascloner "$INSTALL_DIR/.venv/bin/pip" install rich==13.7.1 typer==0.12.3
+if ! "$INSTALL_DIR/.venv/bin/python" -c "import rich, typer, click" 2>/dev/null; then
+    echo_info "Installing CLI dependencies (Rich, Typer, Click)..."
+    sudo -u mascloner "$INSTALL_DIR/.venv/bin/pip" install rich==13.7.1 typer==0.12.3 click==8.1.7
     echo_success "✓ Dependencies installed"
 else
     echo_success "✓ Dependencies already installed"

@@ -5,10 +5,9 @@ MasCloner CLI - Main entry point for the command-line interface.
 This provides a modern, user-friendly CLI with Rich UI components.
 """
 import sys
-from pathlib import Path
-from typing import Optional
 
 import typer
+from click.exceptions import ClickException
 from rich.console import Console
 
 from ops.cli.commands import update, status, rollback
@@ -44,9 +43,14 @@ def cli():
     """Entry point for the CLI."""
     try:
         app()
+    except typer.Exit as exc:
+        raise SystemExit(exc.exit_code)
     except KeyboardInterrupt:
         console.print("\n[yellow]⚠ Operation cancelled by user[/yellow]")
         sys.exit(130)
+    except ClickException as exc:
+        console.print(f"[red]✗ {exc.format_message()}[/red]")
+        sys.exit(exc.exit_code)
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")
         sys.exit(1)
