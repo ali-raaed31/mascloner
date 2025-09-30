@@ -15,7 +15,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from ops.cli.ui.layout import UpdateLayout, live_spinner
 from ops.cli.ui.panels import (
     show_changelog,
     show_completion_summary,
@@ -782,10 +781,3 @@ def run_health_checks() -> List[Tuple[str, bool, str]]:
     return checks
 
 
-@contextmanager
-def live_spinner(layout: UpdateLayout, message: str):
-    layout.log(f"{message}...")
-    with layout.progress.progress._live if hasattr(layout.progress.progress, "_live") else console.status(
-        f"[bold blue]{message}...", spinner="dots"
-    ):
-        yield

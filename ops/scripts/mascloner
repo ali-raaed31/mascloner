@@ -48,6 +48,12 @@ if [[ ! -d "$INSTALL_DIR/ops/cli" ]]; then
     esac
 fi
 
+# Change to installation directory for proper module resolution
+cd "$INSTALL_DIR" || {
+    echo -e "${RED}Error: Cannot access installation directory${NC}"
+    exit 1
+}
+
 # Set PYTHONPATH to include the MasCloner directory
 export PYTHONPATH="$INSTALL_DIR:$PYTHONPATH"
 
