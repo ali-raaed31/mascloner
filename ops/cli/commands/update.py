@@ -1,6 +1,6 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 1.0.1
-# Last Updated: 2024-09-30
+# Version: 1.0.2
+# Last Updated: 2025-09-30
 # Changes: Fixed trailing comma bug, added ops/ directory comparison
 
 import shutil
