@@ -12,6 +12,8 @@ from contextlib import contextmanager
 
 import typer
 from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 from ops.cli.ui.panels import (
     show_changelog,
@@ -22,8 +24,13 @@ from ops.cli.ui.panels import (
     show_service_logs,
     show_version_info,
 )
-from ops.cli.ui.layout import UpdateLayout, live_spinner
-from ops.cli.ui.progress import show_error, show_success, show_warning
+from ops.cli.ui.progress import (
+    show_error,
+    show_header,
+    show_info,
+    show_success,
+    show_warning,
+)
 from ops.cli.ui.tables import (
     create_backup_info_table,
     create_file_changes_table,
@@ -49,6 +56,64 @@ from ops.cli.utils import (
 )
 
 console = Console()
+
+
+class StepIndicator:
+    """Simple step tracker for sequential updates."""
+
+    def __init__(self, total_steps: int):
+        self.total_steps = total_steps
+        self.steps: List[tuple[str, str]] = []  # (name, status)
+
+    def add_step(self, name: str) -> None:
+        self.steps.append((name, "pending"))
+
+    def start_step(self, index: int) -> None:
+        if 0 <= index < len(self.steps):
+            name, _ = self.steps[index]
+            self.steps[index] = (name, "in_progress")
+
+    def complete_step(self, index: int, success: bool = True) -> None:
+        if 0 <= index < len(self.steps):
+            name, _ = self.steps[index]
+            status = "success" if success else "failed"
+            self.steps[index] = (name, status)
+
+    def render(self) -> Table:
+        table = Table.grid(padding=(0, 2))
+        table.add_column(justify="center", style="bold")
+        table.add_column(justify="left")
+
+        for name, status in self.steps:
+            if status == "success":
+                icon = "[green]✓[/green]"
+            elif status == "failed":
+                icon = "[red]✗[/red]"
+            elif status == "in_progress":
+                icon = "[yellow]⠋[/yellow]"
+            else:
+                icon = "[dim]○[/dim]"
+
+            text = Text(name)
+            if status == "success":
+                text.stylize("green")
+            elif status == "failed":
+                text.stylize("red")
+            elif status == "in_progress":
+                text.stylize("bold yellow")
+            else:
+                text.stylize("dim")
+
+            table.add_row(icon, text)
+
+        return table
+
+
+@contextmanager
+def spinner(message: str):
+    """Render a spinner message while a block executes."""
+    with console.status(f"[bold blue]{message}...", spinner="dots"):
+        yield
 
 # Version information
 UPDATE_CMD_VERSION = "1.0.1"
@@ -90,8 +155,7 @@ def main(
     """
     start_time = time.time()
 
-    layout = UpdateLayout()
-    layout.set_header(
+    show_header(
         "MasCloner Update",
         f"Safely update your MasCloner installation to the latest version\nCLI Update Command v{UPDATE_CMD_VERSION} ({UPDATE_CMD_DATE})",
     )
@@ -108,7 +172,7 @@ def main(
         show_error(f"Installation not found at {install_dir}")
         raise typer.Exit(1)
 
-    steps = layout.step_indicator
+    steps = StepIndicator(10)
     steps.add_step("Check prerequisites")
     steps.add_step("Check for updates")
     steps.add_step("Create backup")
@@ -125,47 +189,43 @@ def main(
     backup_path: Optional[Path] = None
 
     try:
-        with layout.live() as live_layout:
-            if dry_run:
-                live_layout.log("[blue]ℹ[/blue] Running in DRY RUN mode - no changes will be made")
+        if dry_run:
+            show_info("Running in DRY RUN mode - no changes will be made")
 
             # Step 1: Prerequisites
             steps.start_step(current_step)
-            live_layout.update_left()
-            live_layout.log("Checking prerequisites...")
-            with live_spinner(live_layout, "Checking prerequisites"):
+            console.print(steps.render())
+            with spinner("Checking prerequisites"):
                 prereq_ok = check_prerequisites(install_dir)
             if not prereq_ok:
                 steps.complete_step(current_step, success=False)
-                live_layout.update_left()
                 raise typer.Exit(1)
             steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 2: Check for updates
             steps.start_step(current_step)
-            live_layout.update_left()
-            live_layout.log("Checking for updates...")
-            with live_spinner(live_layout, "Checking for updates"):
+            console.print(steps.render())
+            with spinner("Checking for updates"):
                 has_updates, temp_dir = check_for_updates(install_dir, git_repo)
 
             if not has_updates:
                 steps.complete_step(current_step, success=True)
                 current_step += 1
-                live_layout.update_left()
-                live_layout.log("[green]✓[/green] Already up to date! No updates available.")
+                console.print(steps.render())
+                show_success("Already up to date! No updates available.")
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 raise typer.Exit(0)
 
             steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             if check_only:
-                live_layout.log("[green]✓[/green] Updates are available!")
-                live_layout.log("Run without --check-only to install updates")
+                show_success("Updates are available!")
+                show_info("Run without --check-only to install updates")
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 raise typer.Exit(0)
@@ -184,9 +244,8 @@ def main(
                 modified = modified_app + modified_ops
 
                 table = create_file_changes_table(added, removed, modified)
-                live_layout.status_panels = [table]
-                live_layout.update_left()
-                live_layout.log("Detected file changes")
+                console.print(table)
+                console.print()
 
             # Confirm update
             if not yes and not dry_run:
@@ -196,22 +255,22 @@ def main(
                     "Update typically takes 1-2 minutes",
                 ]
                 if not show_confirmation_prompt("Proceed with update?", details, default=True):
-                    live_layout.log("Update cancelled by user")
+                    show_info("Update cancelled")
                     if temp_dir:
                         shutil.rmtree(temp_dir, ignore_errors=True)
                     raise typer.Exit(0)
 
             if dry_run:
-                live_layout.log("Dry run complete - stopping here")
+                show_info("Dry run complete - stopping here")
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 raise typer.Exit(0)
 
             # Step 3: Create backup
             steps.start_step(current_step)
-            live_layout.update_left()
+            console.print(steps.render())
             if not skip_backup:
-                with live_spinner(live_layout, "Creating backup"):
+                with spinner("Creating backup"):
                     backup_path = create_backup(install_dir, backup_dir)
 
                 if backup_path:
@@ -222,8 +281,7 @@ def main(
                         get_file_size_human(backup_path),
                         0,  # Could count files if needed
                     )
-                    live_layout.status_panels = [backup_table]
-                    live_layout.update_left()
+                    console.print(backup_table)
                 else:
                     show_error("Failed to create backup")
                     steps.complete_step(current_step, success=False)
@@ -233,28 +291,27 @@ def main(
                 warnings.append("Backup was skipped")
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 4: Stop services
             steps.start_step(current_step)
-            live_layout.update_left()
-            with live_spinner(live_layout, "Stopping services"):
+            console.print(steps.render())
+            with spinner("Stopping services"):
                 services_stopped = stop_all_services()
 
             service_table = create_service_status_table(
                 [(name, status, action) for name, status, action in services_stopped]
             )
-            live_layout.status_panels = [service_table]
-            live_layout.update_left()
+            console.print(service_table)
+            steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 5: Update code
             if not services_only and not deps_only:
                 steps.start_step(current_step)
-                live_layout.update_left()
-                live_layout.log("Updating application code...")
-                with live_spinner(live_layout, "Updating application code"):
+                console.print(steps.render())
+                with spinner("Updating application code"):
                     if temp_dir:
                         update_success = update_code(install_dir, Path(temp_dir), mascloner_user)
                     else:
@@ -270,7 +327,7 @@ def main(
             else:
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Cleanup temp directory
             if temp_dir:
@@ -279,8 +336,8 @@ def main(
             # Step 6: Update dependencies
             if not services_only:
                 steps.start_step(current_step)
-                live_layout.update_left()
-                with live_spinner(live_layout, "Updating Python dependencies"):
+                console.print(steps.render())
+                with spinner("Updating Python dependencies"):
                     deps_success = update_dependencies(install_dir, mascloner_user)
 
                 if deps_success:
@@ -293,13 +350,13 @@ def main(
             else:
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 7: Run migrations
             if not services_only and not deps_only:
                 steps.start_step(current_step)
-                live_layout.update_left()
-                with live_spinner(live_layout, "Running database migrations"):
+                console.print(steps.render())
+                with spinner("Running database migrations"):
                     migration_success = run_migrations(install_dir, mascloner_user)
 
                 if migration_success:
@@ -311,12 +368,12 @@ def main(
             else:
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 8: Update systemd services
             steps.start_step(current_step)
-            live_layout.update_left()
-            with live_spinner(live_layout, "Updating systemd services"):
+            console.print(steps.render())
+            with spinner("Updating systemd services"):
                 services_updated = update_systemd_services(install_dir)
 
             if services_updated:
@@ -325,12 +382,12 @@ def main(
                 show_info("No service updates needed")
             steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 9: Start services
             steps.start_step(current_step)
-            live_layout.update_left()
-            with live_spinner(live_layout, "Starting services"):
+            console.print(steps.render())
+            with spinner("Starting services"):
                 time.sleep(2)
                 services_started = start_all_services()
 
@@ -348,18 +405,17 @@ def main(
                 show_success("All services started successfully")
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
             # Step 10: Health check
             steps.start_step(current_step)
-            live_layout.update_left()
-            with live_spinner(live_layout, "Running health checks"):
+            console.print(steps.render())
+            with spinner("Running health checks"):
                 time.sleep(5)
                 health_checks = run_health_checks()
 
             health_table = create_health_check_table(health_checks)
-            live_layout.status_panels = [health_table]
-            live_layout.update_left()
+            console.print(health_table)
 
             failed_checks = [name for name, passed, _ in health_checks if not passed]
             if failed_checks:
@@ -368,17 +424,9 @@ def main(
             else:
                 steps.complete_step(current_step, success=True)
             current_step += 1
-            live_layout.update_left()
+            console.print(steps.render())
 
         duration = time.time() - start_time
-        layout.log_buffer.add("""
-Summary:
-- Duration: {0:.1f} seconds
-- Steps completed: {1}/{2}
-""".format(duration, current_step, 10))
-        layout.update_right()
-        layout.log("[green]✓ Update completed successfully[/green]")
-
         console.print()
         show_completion_summary(
             success=len(failed_services) == 0 and len(failed_checks) == 0,
@@ -398,11 +446,11 @@ Summary:
         show_next_steps(next_steps)
 
         # Reinstall CLI dependencies and re-link command
-        layout.log("Finalizing CLI installation...")
+        show_info("Finalizing CLI installation...")
         if install_cli_dependencies(install_dir):
-            layout.log("[green]✓[/green] CLI dependencies verified")
+            show_success("CLI dependencies verified")
         else:
-            layout.log("[yellow]⚠[/yellow] CLI dependency check failed - run install-cli.sh manually")
+            show_warning("CLI dependency check failed - run install-cli.sh manually")
 
         wrapper_path = install_dir / "ops" / "scripts" / "mascloner"
         system_bin = Path("/usr/local/bin/mascloner")
@@ -412,9 +460,8 @@ Summary:
             if system_bin.exists() or system_bin.is_symlink():
                 system_bin.unlink(missing_ok=True)
             system_bin.symlink_to(wrapper_path)
-            layout.log("[green]✓[/green] CLI command linked at /usr/local/bin/mascloner")
+            show_success("CLI command linked at /usr/local/bin/mascloner")
         else:
-            layout.log("[yellow]⚠[/yellow] CLI wrapper missing - unable to refresh mascloner command")
             show_warning("CLI wrapper missing - unable to refresh mascloner command")
 
     except KeyboardInterrupt:
