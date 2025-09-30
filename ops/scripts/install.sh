@@ -2,6 +2,8 @@
 set -euo pipefail
 
 # MasCloner Production Installation Script
+# Version: 2.0.0
+# Last Updated: 2025-09-30
 # Supports Debian/Ubuntu with SystemD, Cloudflare Tunnel, and Zero Trust
 
 # Colors for output
@@ -164,8 +166,8 @@ setup_directories() {
     echo_info "Source directory: $SOURCE_DIR"
     echo_info "Target directory: $INSTALL_DIR"
     
-    # Create main directory structure
-    mkdir -p "$INSTALL_DIR"/{data,logs,etc}
+    # Create main directory structure (including backup for updates)
+    mkdir -p "$INSTALL_DIR"/{data,logs,etc,backup}
     
     # Copy entire application to target location
     echo_info "Copying application files..."
@@ -187,13 +189,25 @@ setup_directories() {
         exit 1
     fi
     
+    # Store the current Git commit hash for version tracking
+    if [[ -d "$SOURCE_DIR/.git" ]]; then
+        echo_info "Recording installation version..."
+        CURRENT_COMMIT=$(cd "$SOURCE_DIR" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+        echo "$CURRENT_COMMIT" > "$INSTALL_DIR/.commit_hash"
+        echo_success "Installed version: $CURRENT_COMMIT"
+    else
+        echo_warning "Source is not a git repository - version tracking may not work"
+        echo "unknown" > "$INSTALL_DIR/.commit_hash"
+    fi
+    
     # Set ownership and permissions
     chown -R "$MASCLONER_USER:$MASCLONER_GROUP" "$INSTALL_DIR"
     chmod 755 "$INSTALL_DIR"
-    chmod 700 "$INSTALL_DIR/etc"  # Sensitive config files
-    chmod 750 "$INSTALL_DIR/data" # Database directory
-    chmod 755 "$INSTALL_DIR/logs" # Log directory
-    chmod 755 "$INSTALL_DIR/ops"  # Operations scripts
+    chmod 700 "$INSTALL_DIR/etc"    # Sensitive config files
+    chmod 750 "$INSTALL_DIR/data"   # Database directory
+    chmod 755 "$INSTALL_DIR/logs"   # Log directory
+    chmod 755 "$INSTALL_DIR/ops"    # Operations scripts
+    chmod 750 "$INSTALL_DIR/backup" # Backup directory for updates
     
     echo_success "Directory structure created and files copied"
 }
@@ -385,6 +399,37 @@ print('Database initialized successfully')
     echo_success "Database initialized"
 }
 
+install_cli_command() {
+    echo_info "Installing MasCloner CLI command..."
+    
+    local CLI_WRAPPER="$INSTALL_DIR/ops/scripts/mascloner"
+    local SYSTEM_BIN="/usr/local/bin/mascloner"
+    
+    # Make CLI wrapper executable
+    chmod +x "$CLI_WRAPPER"
+    
+    # Create symlink to system bin
+    if [[ -L "$SYSTEM_BIN" ]] || [[ -f "$SYSTEM_BIN" ]]; then
+        echo_info "Removing existing mascloner command..."
+        rm -f "$SYSTEM_BIN"
+    fi
+    
+    ln -s "$CLI_WRAPPER" "$SYSTEM_BIN"
+    echo_success "✓ CLI command installed to $SYSTEM_BIN"
+    
+    # Verify CLI dependencies are installed (should be from requirements.txt)
+    echo_info "Verifying CLI dependencies..."
+    if ! sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/python" -c "import rich, typer, click" 2>/dev/null; then
+        echo_warning "CLI dependencies missing, installing now..."
+        sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/pip" install rich==13.7.1 typer==0.12.3 click==8.1.7
+        echo_success "✓ CLI dependencies installed"
+    else
+        echo_success "✓ CLI dependencies verified"
+    fi
+    
+    echo_success "MasCloner CLI installed successfully"
+}
+
 setup_cloudflare_tunnel() {
     echo_info "Setting up Cloudflare Tunnel configuration..."
     
@@ -456,10 +501,16 @@ print_next_steps() {
     echo "   - API docs: http://localhost:8787/docs"
     echo "   - Cloudflare Tunnel: (configure your domain)"
     echo
-    echo "4. 📊 Check service status:"
+    echo "4. 🔧 Use the CLI command:"
+    echo "   sudo mascloner update          - Update MasCloner"
+    echo "   sudo mascloner status          - Check status"
+    echo "   sudo mascloner rollback        - Rollback to backup"
+    echo "   mascloner --help               - Show all commands"
+    echo
+    echo "5. 📊 Check service status:"
     echo "   sudo systemctl status mascloner-api mascloner-ui"
     echo
-    echo "5. 📋 View logs:"
+    echo "6. 📋 View logs:"
     echo "   journalctl -f -u mascloner-api"
     echo "   journalctl -f -u mascloner-ui"
     echo
@@ -492,6 +543,7 @@ main() {
     setup_logrotate
     setup_firewall
     initialize_database
+    install_cli_command
     setup_cloudflare_tunnel
     start_services
     print_next_steps
