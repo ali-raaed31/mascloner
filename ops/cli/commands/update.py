@@ -144,17 +144,17 @@ def main(
 
             # Step 2: Check for updates
             with step_context(layout, current_step):
-                has_updates, temp_dir = check_for_updates(install_dir, git_repo, layout)
+                has_updates, update_data = check_for_updates(install_dir, git_repo, layout)
 
             if not has_updates:
                 current_step += 1
                 layout.add_log("Already up to date! No updates available.", style="green")
-                if temp_dir:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
                 live.stop()
                 show_success("Already up to date! No updates available.")
                 raise typer.Exit(0)
 
+            # Unpack update data
+            temp_dir, changelog, changed_files = update_data
             current_step += 1
 
             if check_only:
@@ -163,24 +163,23 @@ def main(
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 live.stop()
+                
+                # Show changelog
+                if changelog:
+                    from ops.cli.ui.panels import show_changelog
+                    show_changelog("\n".join(changelog))
+                
                 show_success("Updates are available!")
                 show_info("Run without --check-only to install updates")
                 raise typer.Exit(0)
 
-            # Show what will be updated
-            if temp_dir:
-                added_app, removed_app, modified_app = compare_directories(
-                    install_dir / "app", Path(temp_dir) / "app"
-                )
-                added_ops, removed_ops, modified_ops = compare_directories(
-                    install_dir / "ops", Path(temp_dir) / "ops"
-                )
-
-                added = added_app + added_ops
-                removed = removed_app + removed_ops
-                modified = modified_app + modified_ops
-
-                layout.add_log(f"Found {len(modified)} modified, {len(added)} new, {len(removed)} removed files", style="cyan")
+            # Display changelog and file changes
+            if changelog:
+                layout.add_log("=== Release Notes ===", style="bold cyan")
+                for commit in changelog[:5]:  # Show first 5 commits in log
+                    layout.add_log(f"  • {commit}", style="white")
+                if len(changelog) > 5:
+                    layout.add_log(f"  ... and {len(changelog) - 5} more commits", style="dim")
 
             # Confirm update (pause live display for prompt)
             if not yes and not dry_run:
@@ -400,8 +399,13 @@ def check_prerequisites(install_dir: Path, layout: Optional[UpdateLayout] = None
 
 def check_for_updates(
     install_dir: Path, git_repo: str, layout: Optional[UpdateLayout] = None
-) -> Tuple[bool, Optional[str]]:
-    """Check if updates are available using git commit comparison."""
+) -> Tuple[bool, Optional[Tuple]]:
+    """Check if updates are available using git commit comparison.
+    
+    Returns:
+        Tuple of (has_updates, update_data)
+        where update_data is (temp_dir, changelog, changed_files) or None
+    """
     temp_dir = tempfile.mkdtemp(prefix="mascloner_update_")
     
     try:
@@ -464,27 +468,47 @@ def check_for_updates(
         if layout:
             layout.add_log(f"Update available: {local_commit[:8]} → {remote_commit[:8]}", style="cyan")
         
-        # Optionally show file changes for information
-        added_app, removed_app, modified_app = compare_directories(
-            install_dir / "app", Path(temp_dir) / "app"
-        )
-        added_ops, removed_ops, modified_ops = compare_directories(
-            install_dir / "ops", Path(temp_dir) / "ops"
-        )
-        
-        total_changes = (
-            len(added_app) + len(removed_app) + len(modified_app) +
-            len(added_ops) + len(removed_ops) + len(modified_ops)
-        )
-        
-        if layout and total_changes > 0:
-            layout.add_log(
-                f"Files changed: {len(modified_app + modified_ops)} modified, "
-                f"{len(added_app + added_ops)} added, {len(removed_app + removed_ops)} removed",
-                style="cyan"
+        # Get commit messages between versions (release notes)
+        changelog = []
+        if local_commit != "unknown":
+            exit_code, log_output, _ = run_command(
+                ["git", "-C", temp_dir, "log", "--oneline", "--no-decorate", f"{local_commit}..{remote_commit}"],
+                check=False,
+                capture=True,
             )
+            
+            if exit_code == 0 and log_output.strip():
+                changelog = log_output.strip().split('\n')
+                if layout:
+                    layout.add_log(f"Found {len(changelog)} new commits", style="blue")
         
-        return True, temp_dir
+        # Get changed files between commits
+        changed_files = []
+        if local_commit != "unknown":
+            exit_code, diff_output, _ = run_command(
+                ["git", "-C", temp_dir, "diff", "--name-status", f"{local_commit}..{remote_commit}"],
+                check=False,
+                capture=True,
+            )
+            
+            if exit_code == 0 and diff_output.strip():
+                for line in diff_output.strip().split('\n'):
+                    parts = line.split('\t', 1)
+                    if len(parts) == 2:
+                        status, filepath = parts
+                        changed_files.append((status, filepath))
+                
+                if layout:
+                    modified = len([f for s, f in changed_files if s == 'M'])
+                    added = len([f for s, f in changed_files if s == 'A'])
+                    deleted = len([f for s, f in changed_files if s == 'D'])
+                    layout.add_log(
+                        f"Files: {modified} modified, {added} added, {deleted} deleted",
+                        style="cyan"
+                    )
+        
+        # Store changelog and file changes for later display
+        return True, (temp_dir, changelog, changed_files)
 
     except Exception as e:
         if layout:
@@ -694,6 +718,7 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
 
     # Check API endpoint with retry (may take time to initialize after update)
     api_ok = False
+    api_error = None
     for attempt in range(3):
         api_ok = check_http_endpoint("http://127.0.0.1:8787/health", timeout=5)
         if api_ok:
@@ -701,6 +726,41 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
         if layout and attempt < 2:
             layout.add_log(f"API health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
         time.sleep(2)
+    
+    # If API health check failed, get detailed diagnostics
+    if not api_ok and layout:
+        layout.add_log("=== API Health Check Failed - Diagnostics ===", style="bold red")
+        
+        # Check if port is listening
+        exit_code, netstat_out, _ = run_command(
+            ["ss", "-tlnp"],
+            check=False,
+            capture=True,
+        )
+        if exit_code == 0 and ":8787" in netstat_out:
+            # Extract the line with port 8787
+            for line in netstat_out.split('\n'):
+                if ":8787" in line:
+                    layout.add_log(f"Port 8787 status: {line.strip()[:100]}", style="yellow")
+                    break
+        else:
+            layout.add_log("Port 8787 is NOT listening - API not started", style="red")
+        
+        # Check API service logs
+        logs = get_service_logs("mascloner-api", lines=10)
+        if logs:
+            layout.add_log("Recent API logs:", style="yellow")
+            for log_line in logs[-5:]:  # Last 5 lines
+                layout.add_log(f"  {log_line[:120]}", style="dim")
+        
+        # Try to curl the endpoint for more details
+        exit_code, curl_out, curl_err = run_command(
+            ["curl", "-v", "http://127.0.0.1:8787/health"],
+            check=False,
+            capture=True,
+        )
+        if curl_err:
+            layout.add_log(f"Connection error: {curl_err[:200]}", style="red")
     
     checks.append(("API Health", api_ok, "http://127.0.0.1:8787/health"))
     if layout:
