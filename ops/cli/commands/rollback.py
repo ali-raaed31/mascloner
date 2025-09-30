@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ops.cli.ui.panels import show_confirmation_prompt, show_error_recovery, show_next_steps
-from ops.cli.ui.progress import show_error, show_header, show_info, show_success, spinner
+from ops.cli.ui.progress import show_error, show_header, show_info, show_success
 from ops.cli.utils import (
     get_backup_dir,
     get_file_size_human,
@@ -130,7 +130,7 @@ def main(
 
     try:
         # Stop services
-        with spinner("Stopping services"):
+        with console.status("[bold blue]Stopping services...", spinner="dots"):
             services = ["mascloner-api", "mascloner-ui", "mascloner-tunnel"]
             for service in services:
                 stop_service(service)
@@ -138,7 +138,7 @@ def main(
         show_success("Services stopped")
 
         # Extract backup
-        with spinner("Restoring from backup"):
+        with console.status("[bold blue]Restoring from backup...", spinner="dots"):
             # Extract to install directory
             with tarfile.open(backup_path, "r:gz") as tar:
                 tar.extractall(install_dir)
@@ -147,14 +147,14 @@ def main(
 
         # Set ownership
         mascloner_user = get_mascloner_user()
-        with spinner("Setting permissions"):
+        with console.status("[bold blue]Setting permissions...", spinner="dots"):
             run_command(
                 ["chown", "-R", f"{mascloner_user}:{mascloner_user}", str(install_dir)],
                 check=False,
             )
 
         # Start services
-        with spinner("Starting services"):
+        with console.status("[bold blue]Starting services...", spinner="dots"):
             time.sleep(2)
             for service in ["mascloner-api", "mascloner-ui", "mascloner-tunnel"]:
                 start_service(service)
