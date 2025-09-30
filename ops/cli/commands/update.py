@@ -1,4 +1,8 @@
 """Update command - Update MasCloner to the latest version."""
+# Version: 1.0.1
+# Last Updated: 2024-09-30
+# Changes: Fixed trailing comma bug, added ops/ directory comparison
+
 import shutil
 import tempfile
 import time
@@ -51,6 +55,10 @@ from ops.cli.utils import (
 
 console = Console()
 
+# Version information
+UPDATE_CMD_VERSION = "1.0.1"
+UPDATE_CMD_DATE = "2024-09-30"
+
 
 def main(
     yes: bool = typer.Option(
@@ -75,6 +83,8 @@ def main(
     """
     Update MasCloner to the latest version.
     
+    [dim]CLI Update Command v1.0.1 (2024-09-30)[/dim]
+    
     This command will:
     - Check for available updates
     - Create a backup of your installation
@@ -85,10 +95,10 @@ def main(
     """
     start_time = time.time()
 
-    # Show header
+    # Show header with version
     show_header(
         "MasCloner Update",
-        "Safely update your MasCloner installation to the latest version",
+        f"Safely update your MasCloner installation to the latest version\nCLI Update Command v{UPDATE_CMD_VERSION} ({UPDATE_CMD_DATE})",
     )
 
     # Check prerequisites
