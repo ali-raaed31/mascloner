@@ -1,0 +1,55 @@
+#!/bin/bash
+#
+# MasCloner CLI Wrapper
+# This script provides the main 'mascloner' command entry point
+#
+
+# Configuration
+INSTALL_DIR="${INSTALL_DIR:-/srv/mascloner}"
+VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
+
+# Colors for fallback messages
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Check if installation exists
+if [[ ! -d "$INSTALL_DIR" ]]; then
+    echo -e "${RED}Error: MasCloner installation not found at $INSTALL_DIR${NC}"
+    exit 1
+fi
+
+# Check if virtual environment exists
+if [[ ! -f "$VENV_PYTHON" ]]; then
+    echo -e "${RED}Error: Python virtual environment not found${NC}"
+    echo -e "${YELLOW}Expected at: $VENV_PYTHON${NC}"
+    exit 1
+fi
+
+# Check if CLI module exists
+if [[ ! -d "$INSTALL_DIR/ops/cli" ]]; then
+    echo -e "${YELLOW}Warning: Modern CLI not found, using legacy scripts${NC}"
+    
+    # Fallback to legacy bash scripts
+    case "${1:-}" in
+        update)
+            shift
+            exec bash "$INSTALL_DIR/ops/scripts/update.sh" "$@"
+            ;;
+        status)
+            exec bash "$INSTALL_DIR/ops/scripts/health-check.sh"
+            ;;
+        *)
+            echo "Usage: mascloner {update|status}"
+            echo ""
+            echo "Note: Modern CLI not installed. Using legacy mode."
+            exit 1
+            ;;
+    esac
+fi
+
+# Set PYTHONPATH to include the MasCloner directory
+export PYTHONPATH="$INSTALL_DIR:$PYTHONPATH"
+
+# Run the Python CLI
+exec "$VENV_PYTHON" -m ops.cli.main "$@"
