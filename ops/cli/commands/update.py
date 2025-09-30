@@ -70,7 +70,7 @@ def main(
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be done without making changes"
-    ),
+    )
 ):
     """
     Update MasCloner to the latest version.
