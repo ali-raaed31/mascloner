@@ -661,14 +661,14 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
     # Check API endpoint with retry (may take time to initialize after update)
     api_ok = False
     for attempt in range(3):
-        api_ok = check_http_endpoint("http://127.0.0.1:8000/health", timeout=5)
+        api_ok = check_http_endpoint("http://127.0.0.1:8787/health", timeout=5)
         if api_ok:
             break
         if layout and attempt < 2:
             layout.add_log(f"API health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
         time.sleep(2)
     
-    checks.append(("API Health", api_ok, "http://127.0.0.1:8000/health"))
+    checks.append(("API Health", api_ok, "http://127.0.0.1:8787/health"))
     if layout:
         layout.add_log(f"API health: {'✓' if api_ok else '✗'}", style="green" if api_ok else "red")
 
