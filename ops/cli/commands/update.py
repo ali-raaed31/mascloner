@@ -1,7 +1,7 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.1.0
+# Version: 2.2.0
 # Last Updated: 2025-09-30
-# Changes: Replaced file comparison with git commit hash comparison for reliability
+# Changes: Added changelog display and detailed API health check diagnostics
 
 import glob
 import shutil
@@ -55,7 +55,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.1.0"
+UPDATE_CMD_VERSION = "2.2.0"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
@@ -82,7 +82,7 @@ def main(
     """
     Update MasCloner to the latest version.
     
-    [dim]CLI Update Command v2.1.0 (2025-09-30)[/dim]
+    [dim]CLI Update Command v2.2.0 (2025-09-30)[/dim]
     
     This command will:
     - Check for available updates (via git commit comparison)
