@@ -116,8 +116,8 @@ def spinner(message: str):
         yield
 
 # Version information
-UPDATE_CMD_VERSION = "1.0.1"
-UPDATE_CMD_DATE = "2024-09-30"
+UPDATE_CMD_VERSION = "1.0.2"
+UPDATE_CMD_DATE = "2025-09-30"
 
 
 def main(
