@@ -14,7 +14,12 @@ st.set_page_config(
     page_title="Home - MasCloner",
     page_icon="🏠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': "MasCloner - Automated Google Drive to Nextcloud sync"
+    }
 )
 
 # Initialize API client

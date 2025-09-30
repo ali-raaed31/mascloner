@@ -113,7 +113,7 @@ NC_PASS_OBSCURED=dummy_obscured_password
     print("\nNext steps:")
     print("1. Install dependencies: pip install -r requirements.txt")
     print("2. Run API server: python -m app.api.main")
-    print("3. In another terminal, run UI: streamlit run app/ui/streamlit_app.py")
+    print("3. In another terminal, run UI: streamlit run app/ui/Home.py")
     print("\nNote: This is a development setup with dummy configurations.")
     print("For production, configure real rclone remotes and use .env.production")
 

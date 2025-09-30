@@ -40,7 +40,7 @@ if not status:
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("🏠 Home", use_container_width=True):
-        st.switch_page("streamlit_app.py")
+        st.switch_page("Home.py")
 with col2:
     if st.button("⚙️ Settings", use_container_width=True):
         st.switch_page("pages/2_Settings.py")

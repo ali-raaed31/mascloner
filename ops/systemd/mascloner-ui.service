@@ -13,7 +13,7 @@ WorkingDirectory=/srv/mascloner
 Environment=PATH=/srv/mascloner/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/srv/mascloner
 EnvironmentFile=/srv/mascloner/.env
-ExecStart=/srv/mascloner/.venv/bin/streamlit run app/ui/streamlit_app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+ExecStart=/srv/mascloner/.venv/bin/streamlit run app/ui/Home.py --server.port 8501 --server.address 127.0.0.1 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=15

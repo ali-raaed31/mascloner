@@ -38,7 +38,7 @@ if not status:
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("🏠 Home", use_container_width=True):
-        st.switch_page("streamlit_app.py")
+        st.switch_page("Home.py")
 with col2:
     if st.button("⚙️ Settings", use_container_width=True):
         st.switch_page("pages/2_Settings.py")
@@ -154,7 +154,7 @@ if config_status["all_configured"]:
     
     with col1:
         if st.button("🔄 Go to Home Dashboard", type="primary", use_container_width=True):
-            st.switch_page("streamlit_app.py")
+            st.switch_page("Home.py")
     
     with col2:
         if st.button("⚙️ Modify Settings", use_container_width=True):
@@ -577,7 +577,7 @@ else:
                     del st.session_state.setup_step
                 if "setup_data" in st.session_state:
                     del st.session_state.setup_data
-                st.switch_page("streamlit_app.py")
+                st.switch_page("Home.py")
         
         with col2:
             if st.button("⚙️ Open Settings", use_container_width=True):

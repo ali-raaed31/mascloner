@@ -64,7 +64,7 @@ MasCloner is a production-ready admin UI + API system for managing automated one
 
 6. **Start UI (in another terminal)**:
    ```bash
-   streamlit run app/ui/streamlit_app.py
+   streamlit run app/ui/Home.py
    ```
 
 7. **Access the application**:
@@ -242,7 +242,7 @@ Configure via web UI or API:
 │   │   ├── tree_builder.py # File tree visualization
 │   │   └── rclone_runner.py # rclone execution
 │   └── ui/                # Streamlit frontend
-│       ├── streamlit_app.py
+│       ├── Home.py
 │       └── pages/         # UI pages
 ├── ops/                   # Deployment scripts
 │   ├── systemd/          # Service files
