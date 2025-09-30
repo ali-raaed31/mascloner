@@ -1,7 +1,7 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.0.1
+# Version: 2.1.0
 # Last Updated: 2025-09-30
-# Changes: Added automatic Python cache cleanup during updates
+# Changes: Replaced file comparison with git commit hash comparison for reliability
 
 import glob
 import shutil
@@ -55,7 +55,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.0.1"
+UPDATE_CMD_VERSION = "2.1.0"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
@@ -82,10 +82,10 @@ def main(
     """
     Update MasCloner to the latest version.
     
-    [dim]CLI Update Command v2.0.1 (2025-09-30)[/dim]
+    [dim]CLI Update Command v2.1.0 (2025-09-30)[/dim]
     
     This command will:
-    - Check for available updates
+    - Check for available updates (via git commit comparison)
     - Create a backup of your installation
     - Stop running services
     - Update code and dependencies
@@ -401,10 +401,26 @@ def check_prerequisites(install_dir: Path, layout: Optional[UpdateLayout] = None
 def check_for_updates(
     install_dir: Path, git_repo: str, layout: Optional[UpdateLayout] = None
 ) -> Tuple[bool, Optional[str]]:
-    """Check if updates are available."""
+    """Check if updates are available using git commit comparison."""
     temp_dir = tempfile.mkdtemp(prefix="mascloner_update_")
     
     try:
+        # Get current local commit hash
+        exit_code, local_commit, _ = run_command(
+            ["git", "-C", str(install_dir), "rev-parse", "HEAD"],
+            check=False,
+            capture=True,
+        )
+        
+        if exit_code != 0:
+            if layout:
+                layout.add_log("Warning: Not a git repository, will clone fresh copy", style="yellow")
+            local_commit = "unknown"
+        else:
+            local_commit = local_commit.strip()
+            if layout:
+                layout.add_log(f"Local commit: {local_commit[:8]}", style="dim")
+        
         # Clone latest version
         exit_code, _, _ = run_command(
             ["git", "clone", "--depth", "1", git_repo, temp_dir],
@@ -420,37 +436,55 @@ def check_for_updates(
             shutil.rmtree(temp_dir, ignore_errors=True)
             return False, None
 
-        # Compare app/ directory
+        # Get remote commit hash
+        exit_code, remote_commit, _ = run_command(
+            ["git", "-C", temp_dir, "rev-parse", "HEAD"],
+            check=False,
+            capture=True,
+        )
+        
+        if exit_code != 0:
+            if layout:
+                layout.add_log("Failed to get remote commit hash", style="red")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return False, None
+        
+        remote_commit = remote_commit.strip()
+        if layout:
+            layout.add_log(f"Remote commit: {remote_commit[:8]}", style="dim")
+        
+        # Compare commits
+        if local_commit == remote_commit:
+            if layout:
+                layout.add_log("Already at latest version", style="dim")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return False, None
+        
+        # Different commits - show what changed
+        if layout:
+            layout.add_log(f"Update available: {local_commit[:8]} → {remote_commit[:8]}", style="cyan")
+        
+        # Optionally show file changes for information
         added_app, removed_app, modified_app = compare_directories(
             install_dir / "app", Path(temp_dir) / "app"
         )
-        
-        # Compare ops/ directory
         added_ops, removed_ops, modified_ops = compare_directories(
             install_dir / "ops", Path(temp_dir) / "ops"
         )
         
-        # Combine results
-        has_changes = (
-            added_app or removed_app or modified_app or
-            added_ops or removed_ops or modified_ops
+        total_changes = (
+            len(added_app) + len(removed_app) + len(modified_app) +
+            len(added_ops) + len(removed_ops) + len(modified_ops)
         )
-
-        if has_changes:
-            total_changes = (
-                len(added_app) + len(removed_app) + len(modified_app) +
-                len(added_ops) + len(removed_ops) + len(modified_ops)
+        
+        if layout and total_changes > 0:
+            layout.add_log(
+                f"Files changed: {len(modified_app + modified_ops)} modified, "
+                f"{len(added_app + added_ops)} added, {len(removed_app + removed_ops)} removed",
+                style="cyan"
             )
-            if layout:
-                layout.add_log(f"Found {total_changes} changes", style="cyan")
-            else:
-                show_info(f"Found {total_changes} changes")
-            return True, temp_dir
-        else:
-            if layout:
-                layout.add_log("No updates available", style="dim")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return False, None
+        
+        return True, temp_dir
 
     except Exception as e:
         if layout:
