@@ -167,9 +167,19 @@ def main(
         # Show what will be updated
         console.print()
         if temp_dir:
-            added, removed, modified = compare_directories(
+            # Compare both app and ops directories
+            added_app, removed_app, modified_app = compare_directories(
                 install_dir / "app", Path(temp_dir) / "app"
             )
+            added_ops, removed_ops, modified_ops = compare_directories(
+                install_dir / "ops", Path(temp_dir) / "ops"
+            )
+            
+            # Combine changes
+            added = added_app + added_ops
+            removed = removed_app + removed_ops
+            modified = modified_app + modified_ops
+            
             table = create_file_changes_table(added, removed, modified)
             console.print(table)
             console.print()
@@ -444,10 +454,19 @@ def check_for_updates(install_dir: Path, git_repo: str) -> Tuple[bool, Optional[
             shutil.rmtree(temp_dir, ignore_errors=True)
             return False, None
 
-        # Compare app directories
-        added, removed, modified = compare_directories(
+        # Compare app and ops directories
+        added_app, removed_app, modified_app = compare_directories(
             install_dir / "app", Path(temp_dir) / "app"
         )
+        
+        added_ops, removed_ops, modified_ops = compare_directories(
+            install_dir / "ops", Path(temp_dir) / "ops"
+        )
+        
+        # Combine all changes
+        added = added_app + added_ops
+        removed = removed_app + removed_ops
+        modified = modified_app + modified_ops
 
         has_changes = bool(added or removed or modified)
 
