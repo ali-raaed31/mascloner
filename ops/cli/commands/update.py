@@ -362,15 +362,15 @@ def check_prerequisites(install_dir: Path, layout: Optional[UpdateLayout] = None
     checks = []
     
     # Check if git is installed
-    result = run_command(["which", "git"], check=False, capture_output=True)
-    git_ok = result.returncode == 0
+    exit_code, _, _ = run_command(["which", "git"], check=False, capture=True)
+    git_ok = exit_code == 0
     checks.append(("Git installed", git_ok))
     if layout:
         layout.add_log(f"Git: {'✓' if git_ok else '✗'}", style="green" if git_ok else "red")
 
     # Check if systemctl is available
-    result = run_command(["which", "systemctl"], check=False, capture_output=True)
-    systemctl_ok = result.returncode == 0
+    exit_code, _, _ = run_command(["which", "systemctl"], check=False, capture=True)
+    systemctl_ok = exit_code == 0
     checks.append(("SystemD available", systemctl_ok))
     if layout:
         layout.add_log(f"SystemD: {'✓' if systemctl_ok else '✗'}", style="green" if systemctl_ok else "red")
@@ -400,13 +400,13 @@ def check_for_updates(
     
     try:
         # Clone latest version
-        result = run_command(
+        exit_code, _, _ = run_command(
             ["git", "clone", "--depth", "1", git_repo, temp_dir],
             check=False,
-            capture_output=True,
+            capture=True,
         )
         
-        if result.returncode != 0:
+        if exit_code != 0:
             if layout:
                 layout.add_log("Failed to fetch updates from repository", style="red")
             else:
@@ -546,13 +546,13 @@ def update_dependencies(
         return True
 
     try:
-        result = run_command(
+        exit_code, _, _ = run_command(
             ["sudo", "-u", user, str(venv_pip), "install", "-r", str(requirements)],
             check=False,
-            capture_output=True,
+            capture=True,
         )
         
-        if result.returncode == 0:
+        if exit_code == 0:
             if layout:
                 layout.add_log("Dependencies updated", style="green")
             return True
