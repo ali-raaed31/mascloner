@@ -176,3 +176,21 @@ def show_completion_summary(
         padding=(1, 2),
     )
     console.print(panel)
+
+
+def show_header(title: str, subtitle: Optional[str] = None):
+    """Display a formatted header."""
+    from rich.align import Align
+
+    text = Text()
+    text.append(title, style="bold cyan")
+    if subtitle:
+        text.append("\n")
+        text.append(subtitle, style="dim")
+
+    panel = Panel(
+        Align.center(text, vertical="middle"),
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)

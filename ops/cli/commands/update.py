@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
+from contextlib import contextmanager
 
 import typer
 from rich.console import Console
@@ -21,15 +22,8 @@ from ops.cli.ui.panels import (
     show_service_logs,
     show_version_info,
 )
-from ops.cli.ui.progress import (
-    StepIndicator,
-    show_error,
-    show_header,
-    show_info,
-    show_success,
-    show_warning,
-    spinner,
-)
+from ops.cli.ui.layout import UpdateLayout, live_spinner
+from ops.cli.ui.progress import show_error, show_success, show_warning
 from ops.cli.ui.tables import (
     create_backup_info_table,
     create_file_changes_table,
@@ -47,6 +41,7 @@ from ops.cli.utils import (
     get_install_dir,
     get_mascloner_user,
     get_service_logs,
+    install_cli_dependencies,
     require_root,
     run_command,
     start_service,
@@ -95,8 +90,8 @@ def main(
     """
     start_time = time.time()
 
-    # Show header with version
-    show_header(
+    layout = UpdateLayout()
+    layout.set_header(
         "MasCloner Update",
         f"Safely update your MasCloner installation to the latest version\nCLI Update Command v{UPDATE_CMD_VERSION} ({UPDATE_CMD_DATE})",
     )
@@ -113,12 +108,7 @@ def main(
         show_error(f"Installation not found at {install_dir}")
         raise typer.Exit(1)
 
-    if dry_run:
-        show_info("Running in DRY RUN mode - no changes will be made")
-        console.print()
-
-    # Initialize step tracker
-    steps = StepIndicator(10)
+    steps = layout.step_indicator
     steps.add_step("Check prerequisites")
     steps.add_step("Check for updates")
     steps.add_step("Create backup")
@@ -135,248 +125,261 @@ def main(
     backup_path: Optional[Path] = None
 
     try:
-        # Step 1: Prerequisites
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Checking prerequisites"):
-            prereq_ok = check_prerequisites(install_dir)
-        if not prereq_ok:
-            steps.complete_step(current_step, success=False)
-            console.print(steps.render())
-            raise typer.Exit(1)
-        steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
+        with layout.live() as live_layout:
+            if dry_run:
+                live_layout.log("[blue]ℹ[/blue] Running in DRY RUN mode - no changes will be made")
 
-        # Step 2: Check for updates
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Checking for updates"):
-            has_updates, temp_dir = check_for_updates(install_dir, git_repo)
-
-        if not has_updates:
+            # Step 1: Prerequisites
+            steps.start_step(current_step)
+            live_layout.update_left()
+            live_layout.log("Checking prerequisites...")
+            with live_spinner(live_layout, "Checking prerequisites"):
+                prereq_ok = check_prerequisites(install_dir)
+            if not prereq_ok:
+                steps.complete_step(current_step, success=False)
+                live_layout.update_left()
+                raise typer.Exit(1)
             steps.complete_step(current_step, success=True)
-            console.print(steps.render())
-            console.print()
-            show_success("Already up to date! No updates available.")
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            raise typer.Exit(0)
+            current_step += 1
+            live_layout.update_left()
 
-        steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
+            # Step 2: Check for updates
+            steps.start_step(current_step)
+            live_layout.update_left()
+            live_layout.log("Checking for updates...")
+            with live_spinner(live_layout, "Checking for updates"):
+                has_updates, temp_dir = check_for_updates(install_dir, git_repo)
 
-        if check_only:
-            show_success("Updates are available!")
-            show_info("Run without --check-only to install updates")
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            raise typer.Exit(0)
-
-        # Show what will be updated
-        console.print()
-        if temp_dir:
-            # Compare both app and ops directories
-            added_app, removed_app, modified_app = compare_directories(
-                install_dir / "app", Path(temp_dir) / "app"
-            )
-            added_ops, removed_ops, modified_ops = compare_directories(
-                install_dir / "ops", Path(temp_dir) / "ops"
-            )
-            
-            # Combine changes
-            added = added_app + added_ops
-            removed = removed_app + removed_ops
-            modified = modified_app + modified_ops
-            
-            table = create_file_changes_table(added, removed, modified)
-            console.print(table)
-            console.print()
-
-        # Confirm update
-        if not yes and not dry_run:
-            details = [
-                "Services will be temporarily stopped",
-                "A backup will be created automatically",
-                "Update typically takes 1-2 minutes",
-            ]
-            if not show_confirmation_prompt("Proceed with update?", details, default=True):
-                show_info("Update cancelled")
+            if not has_updates:
+                steps.complete_step(current_step, success=True)
+                current_step += 1
+                live_layout.update_left()
+                live_layout.log("[green]✓[/green] Already up to date! No updates available.")
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 raise typer.Exit(0)
 
-        if dry_run:
-            show_info("Dry run complete - stopping here")
+            steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            if check_only:
+                live_layout.log("[green]✓[/green] Updates are available!")
+                live_layout.log("Run without --check-only to install updates")
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                raise typer.Exit(0)
+
+            # Show what will be updated
+            if temp_dir:
+                added_app, removed_app, modified_app = compare_directories(
+                    install_dir / "app", Path(temp_dir) / "app"
+                )
+                added_ops, removed_ops, modified_ops = compare_directories(
+                    install_dir / "ops", Path(temp_dir) / "ops"
+                )
+
+                added = added_app + added_ops
+                removed = removed_app + removed_ops
+                modified = modified_app + modified_ops
+
+                table = create_file_changes_table(added, removed, modified)
+                live_layout.status_panels = [table]
+                live_layout.update_left()
+                live_layout.log("Detected file changes")
+
+            # Confirm update
+            if not yes and not dry_run:
+                details = [
+                    "Services will be temporarily stopped",
+                    "A backup will be created automatically",
+                    "Update typically takes 1-2 minutes",
+                ]
+                if not show_confirmation_prompt("Proceed with update?", details, default=True):
+                    live_layout.log("Update cancelled by user")
+                    if temp_dir:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    raise typer.Exit(0)
+
+            if dry_run:
+                live_layout.log("Dry run complete - stopping here")
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                raise typer.Exit(0)
+
+            # Step 3: Create backup
+            steps.start_step(current_step)
+            live_layout.update_left()
+            if not skip_backup:
+                with live_spinner(live_layout, "Creating backup"):
+                    backup_path = create_backup(install_dir, backup_dir)
+
+                if backup_path:
+                    show_success(f"Backup created: {backup_path}")
+                    # Show backup info
+                    backup_table = create_backup_info_table(
+                        str(backup_path),
+                        get_file_size_human(backup_path),
+                        0,  # Could count files if needed
+                    )
+                    live_layout.status_panels = [backup_table]
+                    live_layout.update_left()
+                else:
+                    show_error("Failed to create backup")
+                    steps.complete_step(current_step, success=False)
+                    raise typer.Exit(1)
+            else:
+                show_warning("Skipping backup (--skip-backup)")
+                warnings.append("Backup was skipped")
+                steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            # Step 4: Stop services
+            steps.start_step(current_step)
+            live_layout.update_left()
+            with live_spinner(live_layout, "Stopping services"):
+                services_stopped = stop_all_services()
+
+            service_table = create_service_status_table(
+                [(name, status, action) for name, status, action in services_stopped]
+            )
+            live_layout.status_panels = [service_table]
+            live_layout.update_left()
+            current_step += 1
+            live_layout.update_left()
+
+            # Step 5: Update code
+            if not services_only and not deps_only:
+                steps.start_step(current_step)
+                live_layout.update_left()
+                live_layout.log("Updating application code...")
+                with live_spinner(live_layout, "Updating application code"):
+                    if temp_dir:
+                        update_success = update_code(install_dir, Path(temp_dir), mascloner_user)
+                    else:
+                        update_success = False
+
+                if update_success:
+                    show_success("Code updated successfully")
+                    steps.complete_step(current_step, success=True)
+                else:
+                    show_error("Failed to update code")
+                    steps.complete_step(current_step, success=False)
+                    raise typer.Exit(1)
+            else:
+                steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            # Cleanup temp directory
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            raise typer.Exit(0)
 
-        # Step 3: Create backup
-        steps.start_step(current_step)
-        console.print(steps.render())
-        if not skip_backup:
-            with spinner("Creating backup"):
-                backup_path = create_backup(install_dir, backup_dir)
+            # Step 6: Update dependencies
+            if not services_only:
+                steps.start_step(current_step)
+                live_layout.update_left()
+                with live_spinner(live_layout, "Updating Python dependencies"):
+                    deps_success = update_dependencies(install_dir, mascloner_user)
 
-            if backup_path:
-                show_success(f"Backup created: {backup_path}")
-                # Show backup info
-                backup_table = create_backup_info_table(
-                    str(backup_path),
-                    get_file_size_human(backup_path),
-                    0,  # Could count files if needed
-                )
-                console.print(backup_table)
-                steps.complete_step(current_step, success=True)
-            else:
-                show_error("Failed to create backup")
-                steps.complete_step(current_step, success=False)
-                raise typer.Exit(1)
-        else:
-            show_warning("Skipping backup (--skip-backup)")
-            warnings.append("Backup was skipped")
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Step 4: Stop services
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Stopping services"):
-            services_stopped = stop_all_services()
-
-        service_table = create_service_status_table(
-            [(name, status, action) for name, status, action in services_stopped]
-        )
-        console.print(service_table)
-        steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Step 5: Update code
-        if not services_only and not deps_only:
-            steps.start_step(current_step)
-            console.print(steps.render())
-            with spinner("Updating application code"):
-                if temp_dir:
-                    update_success = update_code(install_dir, Path(temp_dir), mascloner_user)
+                if deps_success:
+                    show_success("Dependencies updated")
+                    steps.complete_step(current_step, success=True)
                 else:
-                    update_success = False
-
-            if update_success:
-                show_success("Code updated successfully")
-                steps.complete_step(current_step, success=True)
+                    show_warning("Some dependencies may have failed to update")
+                    warnings.append("Dependency update had warnings")
+                    steps.complete_step(current_step, success=True)
             else:
-                show_error("Failed to update code")
+                steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            # Step 7: Run migrations
+            if not services_only and not deps_only:
+                steps.start_step(current_step)
+                live_layout.update_left()
+                with live_spinner(live_layout, "Running database migrations"):
+                    migration_success = run_migrations(install_dir, mascloner_user)
+
+                if migration_success:
+                    show_success("Migrations completed")
+                    steps.complete_step(current_step, success=True)
+                else:
+                    show_info("No migrations needed")
+                    steps.complete_step(current_step, success=True)
+            else:
+                steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            # Step 8: Update systemd services
+            steps.start_step(current_step)
+            live_layout.update_left()
+            with live_spinner(live_layout, "Updating systemd services"):
+                services_updated = update_systemd_services(install_dir)
+
+            if services_updated:
+                show_success("SystemD services updated")
+            else:
+                show_info("No service updates needed")
+            steps.complete_step(current_step, success=True)
+            current_step += 1
+            live_layout.update_left()
+
+            # Step 9: Start services
+            steps.start_step(current_step)
+            live_layout.update_left()
+            with live_spinner(live_layout, "Starting services"):
+                time.sleep(2)
+                services_started = start_all_services()
+
+            failed_services = [name for name, status, _ in services_started if status != "active"]
+            if failed_services:
+                show_warning(f"Some services failed to start: {', '.join(failed_services)}")
+                warnings.append(f"Failed to start: {', '.join(failed_services)}")
+                # Show logs for failed services
+                for service in failed_services:
+                    logs = get_service_logs(service)
+                    if logs:
+                        show_service_logs(service, logs, error_context=True)
                 steps.complete_step(current_step, success=False)
-                raise typer.Exit(1)
-        else:
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Cleanup temp directory
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-        # Step 6: Update dependencies
-        if not services_only:
-            steps.start_step(current_step)
-            console.print(steps.render())
-            with spinner("Updating Python dependencies"):
-                deps_success = update_dependencies(install_dir, mascloner_user)
-
-            if deps_success:
-                show_success("Dependencies updated")
-                steps.complete_step(current_step, success=True)
             else:
-                show_warning("Some dependencies may have failed to update")
-                warnings.append("Dependency update had warnings")
+                show_success("All services started successfully")
                 steps.complete_step(current_step, success=True)
-        else:
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
+            current_step += 1
+            live_layout.update_left()
 
-        # Step 7: Run migrations
-        if not services_only and not deps_only:
+            # Step 10: Health check
             steps.start_step(current_step)
-            console.print(steps.render())
-            with spinner("Running database migrations"):
-                migration_success = run_migrations(install_dir, mascloner_user)
+            live_layout.update_left()
+            with live_spinner(live_layout, "Running health checks"):
+                time.sleep(5)
+                health_checks = run_health_checks()
 
-            if migration_success:
-                show_success("Migrations completed")
-                steps.complete_step(current_step, success=True)
+            health_table = create_health_check_table(health_checks)
+            live_layout.status_panels = [health_table]
+            live_layout.update_left()
+
+            failed_checks = [name for name, passed, _ in health_checks if not passed]
+            if failed_checks:
+                warnings.append(f"Health check failures: {', '.join(failed_checks)}")
+                steps.complete_step(current_step, success=False)
             else:
-                show_info("No migrations needed")
                 steps.complete_step(current_step, success=True)
-        else:
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
+            current_step += 1
+            live_layout.update_left()
 
-        # Step 8: Update systemd services
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Updating systemd services"):
-            services_updated = update_systemd_services(install_dir)
-
-        if services_updated:
-            show_success("SystemD services updated")
-        else:
-            show_info("No service updates needed")
-        steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Step 9: Start services
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Starting services"):
-            time.sleep(2)  # Brief pause
-            services_started = start_all_services()
-
-        failed_services = [name for name, status, _ in services_started if status != "active"]
-        if failed_services:
-            show_warning(f"Some services failed to start: {', '.join(failed_services)}")
-            warnings.append(f"Failed to start: {', '.join(failed_services)}")
-            # Show logs for failed services
-            for service in failed_services:
-                logs = get_service_logs(service)
-                if logs:
-                    show_service_logs(service, logs, error_context=True)
-            steps.complete_step(current_step, success=False)
-        else:
-            show_success("All services started successfully")
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Step 10: Health check
-        steps.start_step(current_step)
-        console.print(steps.render())
-        with spinner("Running health checks"):
-            time.sleep(5)  # Wait for services to initialize
-            health_checks = run_health_checks()
-
-        health_table = create_health_check_table(health_checks)
-        console.print(health_table)
-
-        failed_checks = [name for name, passed, _ in health_checks if not passed]
-        if failed_checks:
-            warnings.append(f"Health check failures: {', '.join(failed_checks)}")
-            steps.complete_step(current_step, success=False)
-        else:
-            steps.complete_step(current_step, success=True)
-        current_step += 1
-        console.print(steps.render())
-
-        # Show completion
-        console.print()
         duration = time.time() - start_time
+        layout.log_buffer.add("""
+Summary:
+- Duration: {0:.1f} seconds
+- Steps completed: {1}/{2}
+""".format(duration, current_step, 10))
+        layout.update_right()
+        layout.log("[green]✓ Update completed successfully[/green]")
+
+        console.print()
         show_completion_summary(
             success=len(failed_services) == 0 and len(failed_checks) == 0,
             duration=duration,
@@ -385,15 +388,34 @@ def main(
             warnings=warnings if warnings else None,
         )
 
-        # Show next steps
         next_steps = [
-            "🔍 Review the health check results above",
+            "🔍 Review the health check results in the left panel",
             "🌐 Access your MasCloner UI to verify functionality",
             "📊 Monitor service logs: journalctl -f -u mascloner-api",
         ]
         if backup_path:
             next_steps.append(f"💾 Backup saved at: {backup_path}")
         show_next_steps(next_steps)
+
+        # Reinstall CLI dependencies and re-link command
+        layout.log("Finalizing CLI installation...")
+        if install_cli_dependencies(install_dir):
+            layout.log("[green]✓[/green] CLI dependencies verified")
+        else:
+            layout.log("[yellow]⚠[/yellow] CLI dependency check failed - run install-cli.sh manually")
+
+        wrapper_path = install_dir / "ops" / "scripts" / "mascloner"
+        system_bin = Path("/usr/local/bin/mascloner")
+
+        if wrapper_path.exists():
+            run_command(["chmod", "+x", str(wrapper_path)], check=False)
+            if system_bin.exists() or system_bin.is_symlink():
+                system_bin.unlink(missing_ok=True)
+            system_bin.symlink_to(wrapper_path)
+            layout.log("[green]✓[/green] CLI command linked at /usr/local/bin/mascloner")
+        else:
+            layout.log("[yellow]⚠[/yellow] CLI wrapper missing - unable to refresh mascloner command")
+            show_warning("CLI wrapper missing - unable to refresh mascloner command")
 
     except KeyboardInterrupt:
         console.print()
@@ -710,3 +732,12 @@ def run_health_checks() -> List[Tuple[str, bool, str]]:
     checks.append(("File Tree", tree_ok, "http://127.0.0.1:8787/tree"))
 
     return checks
+
+
+@contextmanager
+def live_spinner(layout: UpdateLayout, message: str):
+    layout.log(f"{message}...")
+    with layout.progress.progress._live if hasattr(layout.progress.progress, "_live") else console.status(
+        f"[bold blue]{message}...", spinner="dots"
+    ):
+        yield

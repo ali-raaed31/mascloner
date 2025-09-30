@@ -1,8 +1,11 @@
 """Progress indicators and status components."""
 from contextlib import contextmanager
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
-from rich.console import Console
+from rich.align import Align
+from rich.console import Console, Group
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
@@ -20,6 +23,29 @@ from rich.text import Text
 console = Console()
 
 
+@dataclass
+class LogBuffer:
+    """Collects log lines for the right-hand panel."""
+
+    max_lines: int = 50
+    lines: List[str] = field(default_factory=list)
+
+    def add(self, message: str) -> None:
+        self.lines.append(message)
+        if len(self.lines) > self.max_lines:
+            self.lines = self.lines[-self.max_lines :]
+
+    def render(self) -> Panel:
+        content = "\n".join(self.lines) if self.lines else "(log output will appear here)"
+        return Panel(
+            content,
+            title="[bold blue]Live Log[/bold blue]",
+            title_align="left",
+            border_style="blue",
+            padding=(1, 2),
+        )
+
+
 class UpdateProgress:
     """Manages progress display for update operations."""
 
@@ -34,7 +60,6 @@ class UpdateProgress:
             console=console,
         )
         self.tasks: dict[str, TaskID] = {}
-        self.live: Optional[Live] = None
 
     def add_task(self, name: str, description: str, total: float = 100.0) -> TaskID:
         """Add a progress task."""
@@ -58,12 +83,6 @@ class UpdateProgress:
                 kwargs["description"] = description
             self.progress.update(self.tasks[name], **kwargs)
 
-    @contextmanager
-    def live_context(self):
-        """Context manager for live progress updates."""
-        with self.progress:
-            yield self
-
 
 class StepIndicator:
     """Shows current step in a multi-step process."""
@@ -71,7 +90,7 @@ class StepIndicator:
     def __init__(self, total_steps: int):
         self.total_steps = total_steps
         self.current_step = 0
-        self.steps: list[tuple[str, str]] = []  # (name, status)
+        self.steps: List[tuple[str, str]] = []  # (name, status)
 
     def add_step(self, name: str):
         """Add a step to track."""
@@ -91,13 +110,12 @@ class StepIndicator:
             status = "success" if success else "failed"
             self.steps[step_index] = (name, status)
 
-    def render(self) -> Table:
-        """Render the step indicator as a table."""
-        table = Table.grid(padding=(0, 2))
+    def render(self) -> Panel:
+        table = Table.grid(padding=(0, 1))
         table.add_column(justify="center", style="bold")
         table.add_column(justify="left")
 
-        for i, (name, status) in enumerate(self.steps):
+        for name, status in self.steps:
             if status == "success":
                 icon = "[green]✓[/green]"
             elif status == "failed":
@@ -119,7 +137,58 @@ class StepIndicator:
 
             table.add_row(icon, step_text)
 
-        return table
+        return Panel(
+            table,
+            title="[bold cyan]Update Steps[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 1),
+        )
+
+
+class UpdateLayout:
+    """Live two-column layout with status on left and log on right."""
+
+    def __init__(self):
+        self.log_buffer = LogBuffer()
+        self.step_indicator = StepIndicator(total_steps=10)
+        self.progress = UpdateProgress()
+        self.status_panels: List[Panel] = []
+
+        self.layout = Layout()
+        self.layout.split_column(
+            Layout(name="header", size=5),
+            Layout(name="body"),
+        )
+        self.layout["body"].split_row(
+            Layout(name="left"),
+            Layout(name="right", ratio=1),
+        )
+
+    def set_header(self, title: str, subtitle: Optional[str] = None):
+        header = show_header(title, subtitle, return_panel=True)
+        self.layout["header"].update(header)
+
+    def update_left(self):
+        content = [self.step_indicator.render()]
+        if self.status_panels:
+            content.extend(self.status_panels)
+        content.append(Panel(self.progress.progress, title="[bold cyan]Progress[/bold cyan]"))
+        group = Group(*content)
+        self.layout["left"].update(group)
+
+    def update_right(self):
+        self.layout["right"].update(self.log_buffer.render())
+
+    def log(self, message: str):
+        self.log_buffer.add(message)
+        self.update_right()
+
+    @contextmanager
+    def live(self):
+        self.update_left()
+        self.update_right()
+        with Live(self.layout, console=console, refresh_per_second=10):
+            yield self
 
 
 @contextmanager
@@ -129,7 +198,7 @@ def spinner(message: str):
         yield
 
 
-def show_header(title: str, subtitle: Optional[str] = None):
+def show_header(title: str, subtitle: Optional[str] = None, return_panel: bool = False):
     """Display a formatted header."""
     text = Text()
     text.append(title, style="bold cyan")
@@ -138,28 +207,26 @@ def show_header(title: str, subtitle: Optional[str] = None):
         text.append(subtitle, style="dim")
 
     panel = Panel(
-        text,
+        Align.center(text, vertical="middle"),
         border_style="cyan",
         padding=(1, 2),
     )
+    if return_panel:
+        return panel
     console.print(panel)
 
 
 def show_success(message: str):
-    """Display a success message."""
     console.print(f"[green]✓[/green] {message}")
 
 
 def show_error(message: str):
-    """Display an error message."""
     console.print(f"[red]✗[/red] {message}")
 
 
 def show_warning(message: str):
-    """Display a warning message."""
     console.print(f"[yellow]⚠[/yellow] {message}")
 
 
 def show_info(message: str):
-    """Display an info message."""
     console.print(f"[blue]ℹ[/blue] {message}")

@@ -272,3 +272,31 @@ def check_http_endpoint(url: str, timeout: int = 10) -> bool:
         return True
     except Exception:
         return False
+
+
+def install_cli_dependencies(install_dir: Path) -> bool:
+    """Ensure CLI dependencies (Rich, Typer, Click) are installed."""
+    python_bin = install_dir / ".venv" / "bin" / "python"
+    pip_bin = install_dir / ".venv" / "bin" / "pip"
+
+    if not python_bin.exists() or not pip_bin.exists():
+        return False
+
+    check_cmd = [str(python_bin), "-c", "import rich, typer, click"]
+    exit_code, _, _ = run_command(check_cmd, check=False)
+
+    if exit_code == 0:
+        return True
+
+    install_cmd = [
+        "sudo",
+        "-u",
+        get_mascloner_user(),
+        str(pip_bin),
+        "install",
+        "rich==13.7.1",
+        "typer==0.12.3",
+        "click==8.1.7",
+    ]
+    exit_code, _, _ = run_command(install_cmd, check=False)
+    return exit_code == 0
