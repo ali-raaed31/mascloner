@@ -281,7 +281,8 @@ def main(
 
             # Step 10: Health check
             with step_context(layout, current_step):
-                time.sleep(2)
+                layout.add_log("Waiting for services to fully initialize...", style="blue")
+                time.sleep(5)
                 health_checks = run_health_checks(layout)
 
             failed_checks = [name for name, passed, _ in health_checks if not passed]
@@ -642,7 +643,7 @@ def update_systemd_services(
 
 
 def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, bool, str]]:
-    """Run health checks on services."""
+    """Run health checks on services with retry logic."""
     checks = []
 
     # Check API service
@@ -657,14 +658,30 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
     if layout:
         layout.add_log(f"UI service: {'✓' if ui_running else '✗'}", style="green" if ui_running else "red")
 
-    # Check API endpoint
-    api_ok = check_http_endpoint("http://127.0.0.1:8000/health")
+    # Check API endpoint with retry (may take time to initialize after update)
+    api_ok = False
+    for attempt in range(3):
+        api_ok = check_http_endpoint("http://127.0.0.1:8000/health", timeout=5)
+        if api_ok:
+            break
+        if layout and attempt < 2:
+            layout.add_log(f"API health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
+        time.sleep(2)
+    
     checks.append(("API Health", api_ok, "http://127.0.0.1:8000/health"))
     if layout:
         layout.add_log(f"API health: {'✓' if api_ok else '✗'}", style="green" if api_ok else "red")
 
-    # Check UI endpoint
-    ui_ok = check_http_endpoint("http://127.0.0.1:8501")
+    # Check UI endpoint with retry
+    ui_ok = False
+    for attempt in range(3):
+        ui_ok = check_http_endpoint("http://127.0.0.1:8501", timeout=5)
+        if ui_ok:
+            break
+        if layout and attempt < 2:
+            layout.add_log(f"UI health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
+        time.sleep(2)
+    
     checks.append(("UI Endpoint", ui_ok, "http://127.0.0.1:8501"))
     if layout:
         layout.add_log(f"UI endpoint: {'✓' if ui_ok else '✗'}", style="green" if ui_ok else "red")
@@ -675,8 +692,16 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
     if layout:
         layout.add_log(f"Tunnel service: {'✓' if tunnel_running else '✗'}", style="green" if tunnel_running else "red")
 
-    # Check file tree endpoint
-    tree_ok = check_http_endpoint("http://127.0.0.1:8787/tree")
+    # Check file tree endpoint with retry
+    tree_ok = False
+    for attempt in range(3):
+        tree_ok = check_http_endpoint("http://127.0.0.1:8787/tree", timeout=5)
+        if tree_ok:
+            break
+        if layout and attempt < 2:
+            layout.add_log(f"File tree check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
+        time.sleep(2)
+    
     checks.append(("File Tree", tree_ok, "http://127.0.0.1:8787/tree"))
     if layout:
         layout.add_log(f"File tree: {'✓' if tree_ok else '✗'}", style="green" if tree_ok else "red")

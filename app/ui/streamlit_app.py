@@ -55,8 +55,6 @@ if not api_connected:
     st.stop()
 
 # System Status Overview
-st.subheader("📊 System Status")
-
 status = api.get_status()
 if status:
     col1, col2, col3, col4 = st.columns(4)
