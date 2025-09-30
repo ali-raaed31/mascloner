@@ -1,7 +1,6 @@
 """Update command - Update MasCloner to the latest version."""
 # Version: 2.2.0
 # Last Updated: 2025-09-30
-# Changes: Added changelog display and detailed API health check diagnostics
 
 import glob
 import shutil
