@@ -1,5 +1,5 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.2.1
+# Version: 2.2.2
 # Last Updated: 2025-09-30
 
 import glob
@@ -54,7 +54,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.2.1"
+UPDATE_CMD_VERSION = "2.2.2"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
@@ -81,7 +81,7 @@ def main(
     """
     Update MasCloner to the latest version.
     
-    [dim]CLI Update Command v2.2.1 (2025-09-30)[/dim]
+    [dim]CLI Update Command v2.2.2 (2025-09-30)[/dim]
     
     This command will:
     - Check for available updates (via git commit comparison)
@@ -482,6 +482,7 @@ def check_for_updates(
         # Get commit messages between versions (release notes)
         changelog = []
         if local_commit != "unknown":
+            # Show commits between local and remote
             exit_code, log_output, _ = run_command(
                 ["git", "-C", temp_dir, "log", "--oneline", "--no-decorate", f"{local_commit}..{remote_commit}"],
                 check=False,
@@ -492,6 +493,18 @@ def check_for_updates(
                 changelog = log_output.strip().split('\n')
                 if layout:
                     layout.add_log(f"Found {len(changelog)} new commits", style="blue")
+        else:
+            # First install or no version file - show last 10 commits from remote
+            exit_code, log_output, _ = run_command(
+                ["git", "-C", temp_dir, "log", "--oneline", "--no-decorate", "-n", "10"],
+                check=False,
+                capture=True,
+            )
+            
+            if exit_code == 0 and log_output.strip():
+                changelog = log_output.strip().split('\n')
+                if layout:
+                    layout.add_log(f"Showing last {len(changelog)} commits (new install)", style="blue")
         
         # Get changed files between commits
         changed_files = []
@@ -517,6 +530,18 @@ def check_for_updates(
                         f"Files: {modified} modified, {added} added, {deleted} deleted",
                         style="cyan"
                     )
+        else:
+            # For new installs, show total file count
+            exit_code, ls_output, _ = run_command(
+                ["find", str(temp_dir), "-type", "f", "-name", "*.py"],
+                check=False,
+                capture=True,
+            )
+            
+            if exit_code == 0 and ls_output.strip():
+                py_count = len(ls_output.strip().split('\n'))
+                if layout:
+                    layout.add_log(f"Installing {py_count} Python files", style="cyan")
         
         # Store changelog, file changes, and remote commit for later use
         return True, (temp_dir, changelog, changed_files, remote_commit)
