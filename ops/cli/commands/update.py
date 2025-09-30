@@ -1,8 +1,9 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.0.0
+# Version: 2.0.1
 # Last Updated: 2025-09-30
-# Changes: Refactored to use two-column UpdateLayout with Live display
+# Changes: Added automatic Python cache cleanup during updates
 
+import glob
 import shutil
 import tempfile
 import time
@@ -54,7 +55,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.0.0"
+UPDATE_CMD_VERSION = "2.0.1"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
@@ -81,13 +82,14 @@ def main(
     """
     Update MasCloner to the latest version.
     
-    [dim]CLI Update Command v2.0.0 (2025-09-30)[/dim]
+    [dim]CLI Update Command v2.0.1 (2025-09-30)[/dim]
     
     This command will:
     - Check for available updates
     - Create a backup of your installation
     - Stop running services
     - Update code and dependencies
+    - Clear Python cache files
     - Restart services
     - Run health checks
     """
@@ -240,6 +242,10 @@ def main(
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 layout.add_log("Cleaned up temporary files", style="dim")
+
+            # Clear Python bytecode cache
+            layout.add_log("Clearing Python cache files...", style="blue")
+            clear_python_cache(install_dir, layout)
 
             # Step 6: Update dependencies
             if not services_only:
@@ -564,6 +570,33 @@ def update_dependencies(
         if layout:
             layout.add_log(f"Error updating dependencies: {e}", style="red")
         return False
+
+
+def clear_python_cache(install_dir: Path, layout: Optional[UpdateLayout] = None) -> None:
+    """Clear all Python bytecode cache files."""
+    cache_count = 0
+    
+    # Remove all .pyc files
+    for pyc_file in glob.glob(str(install_dir / "**" / "*.pyc"), recursive=True):
+        try:
+            Path(pyc_file).unlink()
+            cache_count += 1
+        except Exception:
+            pass
+    
+    # Remove all __pycache__ directories
+    for pycache_dir in glob.glob(str(install_dir / "**" / "__pycache__"), recursive=True):
+        try:
+            shutil.rmtree(pycache_dir)
+            cache_count += 1
+        except Exception:
+            pass
+    
+    if layout:
+        if cache_count > 0:
+            layout.add_log(f"Removed {cache_count} cache files/directories", style="green")
+        else:
+            layout.add_log("No cache files to remove", style="dim")
 
 
 def run_migrations(
