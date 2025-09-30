@@ -1,5 +1,5 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.2.0
+# Version: 2.2.1
 # Last Updated: 2025-09-30
 
 import glob
@@ -54,7 +54,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.2.0"
+UPDATE_CMD_VERSION = "2.2.1"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
@@ -81,7 +81,7 @@ def main(
     """
     Update MasCloner to the latest version.
     
-    [dim]CLI Update Command v2.2.0 (2025-09-30)[/dim]
+    [dim]CLI Update Command v2.2.1 (2025-09-30)[/dim]
     
     This command will:
     - Check for available updates (via git commit comparison)
@@ -153,7 +153,7 @@ def main(
                 raise typer.Exit(0)
 
             # Unpack update data
-            temp_dir, changelog, changed_files = update_data
+            temp_dir, changelog, changed_files, remote_commit = update_data
             current_step += 1
 
             if check_only:
@@ -287,7 +287,19 @@ def main(
             if failed_checks:
                 warnings.append(f"Health check failures: {', '.join(failed_checks)}")
 
-            # Update complete
+            # Update complete - save new commit hash
+            commit_file = install_dir / ".commit_hash"
+            try:
+                commit_file.write_text(remote_commit)
+                # Set ownership to mascloner user
+                run_command(
+                    ["chown", f"{mascloner_user}:{mascloner_user}", str(commit_file)],
+                    check=False,
+                )
+                layout.add_log(f"Saved version: {remote_commit[:8]}", style="dim")
+            except Exception as e:
+                layout.add_log(f"Warning: Could not save version file: {e}", style="yellow")
+            
             duration = time.time() - start_time
             layout.add_log(f"Update completed in {duration:.1f}s", style="bold green")
 
@@ -403,26 +415,26 @@ def check_for_updates(
     
     Returns:
         Tuple of (has_updates, update_data)
-        where update_data is (temp_dir, changelog, changed_files) or None
+        where update_data is (temp_dir, changelog, changed_files, remote_commit) or None
     """
     temp_dir = tempfile.mkdtemp(prefix="mascloner_update_")
     
     try:
-        # Get current local commit hash
-        exit_code, local_commit, _ = run_command(
-            ["git", "-C", str(install_dir), "rev-parse", "HEAD"],
-            check=False,
-            capture=True,
-        )
+        # Get current local commit hash from stored file
+        commit_file = install_dir / ".commit_hash"
+        local_commit = "unknown"
         
-        if exit_code != 0:
-            if layout:
-                layout.add_log("Warning: Not a git repository, will clone fresh copy", style="yellow")
-            local_commit = "unknown"
+        if commit_file.exists():
+            try:
+                local_commit = commit_file.read_text().strip()
+                if layout:
+                    layout.add_log(f"Local version: {local_commit[:8]}", style="dim")
+            except Exception as e:
+                if layout:
+                    layout.add_log(f"Warning: Could not read version file: {e}", style="yellow")
         else:
-            local_commit = local_commit.strip()
             if layout:
-                layout.add_log(f"Local commit: {local_commit[:8]}", style="dim")
+                layout.add_log("No version file found (first install or old version)", style="yellow")
         
         # Clone latest version
         exit_code, _, _ = run_command(
@@ -506,8 +518,8 @@ def check_for_updates(
                         style="cyan"
                     )
         
-        # Store changelog and file changes for later display
-        return True, (temp_dir, changelog, changed_files)
+        # Store changelog, file changes, and remote commit for later use
+        return True, (temp_dir, changelog, changed_files, remote_commit)
 
     except Exception as e:
         if layout:
