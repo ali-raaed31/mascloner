@@ -1,0 +1,209 @@
+"""Google Drive endpoints."""
+
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+
+from fastapi import APIRouter, HTTPException, status
+
+from ..config import config
+from ..schemas import (
+    ApiResponse,
+    GoogleDriveOAuthRequest,
+    GoogleDriveStatusResponse,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/oauth/google-drive", tags=["google-drive"])
+
+
+@router.post("", response_model=ApiResponse)
+async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
+    """Configure Google Drive using OAuth token from rclone authorize."""
+    try:
+        try:
+            token_data = json.loads(request.token)
+            if "access_token" not in token_data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid token format: missing access_token",
+                )
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid token format: not valid JSON",
+            )
+
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+
+        try:
+            subprocess.run(
+                ["rclone", "--config", rclone_config, "config", "delete", "gdrive"],
+                capture_output=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+        cmd = [
+            "rclone",
+            "--config",
+            rclone_config,
+            "config",
+            "create",
+            "gdrive",
+            "drive",
+            f"scope={request.scope}",
+            f"token={request.token}",
+        ]
+
+        if request.client_id and request.client_secret:
+            cmd.extend([f"client_id={request.client_id}", f"client_secret={request.client_secret}"])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+
+        if result.returncode == 0:
+            logger.info("Google Drive configured successfully via OAuth.")
+            return ApiResponse(success=True, message="Google Drive configured successfully")
+
+        logger.error("Google Drive configuration failed: %s", result.stderr)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.stderr or "Failed to configure Google Drive",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Google Drive OAuth configuration error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to configure Google Drive: {exc}",
+        )
+
+
+@router.get("/status", response_model=GoogleDriveStatusResponse)
+async def get_google_drive_status():
+    """Get Google Drive configuration status."""
+    try:
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+
+        result = subprocess.run(
+            ["rclone", "--config", rclone_config, "listremotes"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        configured = result.returncode == 0 and "gdrive:" in result.stdout
+        response_data = {"configured": configured, "remote_name": "gdrive"}
+
+        if configured:
+            try:
+                folder_result = subprocess.run(
+                    [
+                        "rclone",
+                        "--config",
+                        rclone_config,
+                        "--transfers=2",
+                        "--checkers=2",
+                        "lsd",
+                        "gdrive:",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+
+                if folder_result.returncode == 0:
+                    folders = []
+                    for line in folder_result.stdout.strip().split("\n"):
+                        if line.strip():
+                            parts = line.strip().split()
+                            if len(parts) >= 5:
+                                folder_name = " ".join(parts[4:])
+                                folders.append(folder_name)
+
+                    response_data["folders"] = folders[:10]
+                    response_data["scope"] = "drive.readonly"
+            except subprocess.TimeoutExpired:
+                logger.warning("Google Drive folder listing timeout")
+
+        return GoogleDriveStatusResponse(**response_data)
+
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Google Drive status check error: %s", exc)
+        return GoogleDriveStatusResponse(configured=False)
+
+
+@router.post("/test", response_model=ApiResponse)
+async def test_google_drive_connection():
+    """Test Google Drive connection."""
+    try:
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+
+        result = subprocess.run(
+            ["rclone", "--config", rclone_config, "--transfers=4", "--checkers=8", "lsd", "gdrive:"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode == 0:
+            folders = []
+            for line in result.stdout.strip().split("\n"):
+                if line.strip():
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        folder_name = " ".join(parts[4:])
+                        folders.append(folder_name)
+
+            return ApiResponse(
+                success=True,
+                message="Google Drive connection successful",
+                data={"folders": folders[:10]},
+            )
+
+        return ApiResponse(
+            success=False,
+            message=f"Connection failed: {result.stderr or 'Unknown error'}",
+        )
+
+    except subprocess.TimeoutExpired:
+        return ApiResponse(success=False, message="Connection test timeout")
+    except Exception as exc:  # pragma: no cover
+        logger.error("Google Drive connection test error: %s", exc)
+        return ApiResponse(success=False, message=f"Test error: {exc}")
+
+
+@router.delete("", response_model=ApiResponse)
+async def remove_google_drive_config():
+    """Remove Google Drive configuration."""
+    try:
+        base_config = config.get_base_config()
+        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+
+        result = subprocess.run(
+            ["rclone", "--config", rclone_config, "config", "delete", "gdrive"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            return ApiResponse(success=True, message="Google Drive configuration removed successfully")
+
+        return ApiResponse(
+            success=False,
+            message=f"Failed to remove configuration: {result.stderr or 'Unknown error'}",
+        )
+
+    except Exception as exc:  # pragma: no cover
+        logger.error("Google Drive config removal error: %s", exc)
+        return ApiResponse(success=False, message=f"Removal error: {exc}")
