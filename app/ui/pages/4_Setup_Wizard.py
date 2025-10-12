@@ -311,30 +311,34 @@ def render_remote_folder_picker(
     manual_key = f"{state_key}_manual"
     st.session_state.setdefault(manual_key, state["selected_path"])
     
-    cols = st.columns([0.65, 0.35])
-    with cols[0]:
+    col_path, col_browse, col_clear = st.columns([0.65, 0.23, 0.12])
+    with col_path:
         selected_value = st.text_input(
             f"{remote_label} path",
             key=manual_key,
             placeholder=placeholder
         ).strip()
-    with cols[1]:
-        colb1, colb2 = st.columns([0.55, 0.45])
-        with colb1:
-            st.button(
-                f"🌲 Browse {remote_label}",
-                key=f"{state_key}_open_modal",
-                use_container_width=True,
-                on_click=open_folder_modal,
-                args=(remote_name, state_key, remote_label)
-            )
-        with colb2:
-            if st.button("Clear", key=f"{state_key}_clear", use_container_width=True):
-                selected_value = ""
-                st.session_state[manual_key] = ""
-                tree_state = st.session_state.get("folder_tree_states", {}).get(state_key)
-                if tree_state:
-                    tree_state["selected_temp"] = ""
+    with col_browse:
+        st.button(
+            f"🌲 Browse {remote_label}",
+            key=f"{state_key}_open_modal",
+            use_container_width=True,
+            on_click=open_folder_modal,
+            args=(remote_name, state_key, remote_label)
+        )
+    with col_clear:
+        def _clear_selection():
+            st.session_state[manual_key] = ""
+            tree_state = st.session_state.get("folder_tree_states", {}).get(state_key)
+            if tree_state:
+                tree_state["selected_temp"] = ""
+        st.button(
+            "Clear",
+            key=f"{state_key}_clear",
+            use_container_width=True,
+            on_click=_clear_selection
+        )
+    selected_value = st.session_state.get(manual_key, "").strip()
     state["selected_path"] = selected_value
     if selected_value:
         st.caption(f"Selected {remote_label} path: `{selected_value}`")
