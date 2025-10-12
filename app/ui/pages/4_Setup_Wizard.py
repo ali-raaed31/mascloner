@@ -63,10 +63,16 @@ def render_path_editor(remote_label: str, remote_name: str, state_prefix: str, i
     path_key = f"{state_prefix}_path"
     selected_key = f"{state_prefix}_child"
     manual_key = f"{state_prefix}_manual"
+    reset_flag = f"{state_prefix}_reset_child"
 
     if path_key not in st.session_state:
         st.session_state[path_key] = initial_path.strip("/") if initial_path else ""
     current_path = st.session_state[path_key]
+
+    # Handle child reset flag before creating the widget
+    if st.session_state.get(reset_flag, False):
+        st.session_state[selected_key] = ""
+        st.session_state[reset_flag] = False
 
     st.markdown(f"**Current {remote_label} path:** `{current_path or '/'}`")
 
@@ -86,16 +92,16 @@ def render_path_editor(remote_label: str, remote_name: str, state_prefix: str, i
         if st.button("📂 Open folder", key=f"{state_prefix}_open", use_container_width=True, disabled=not selected_child):
             new_path = "/".join(filter(None, [current_path, selected_child])).strip("/")
             st.session_state[path_key] = new_path
-            st.session_state[selected_key] = ""
             st.session_state[manual_key] = new_path
+            st.session_state[reset_flag] = True
             _rerun()
 
     with col_up:
         if st.button("⬆️ Go up", key=f"{state_prefix}_up", use_container_width=True, disabled=not current_path):
             parent = "/".join(current_path.split("/")[:-1]).strip("/")
             st.session_state[path_key] = parent
-            st.session_state[selected_key] = ""
             st.session_state[manual_key] = parent
+            st.session_state[reset_flag] = True
             _rerun()
 
     st.session_state.setdefault(manual_key, current_path)
@@ -107,7 +113,7 @@ def render_path_editor(remote_label: str, remote_name: str, state_prefix: str, i
 
     if st.button("✅ Use manual path", key=f"{state_prefix}_apply_manual", use_container_width=True):
         st.session_state[path_key] = manual_value
-        st.session_state[selected_key] = ""
+        st.session_state[reset_flag] = True
         _rerun()
 
     return st.session_state[path_key]
