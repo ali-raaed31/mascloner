@@ -1265,10 +1265,18 @@ async def browse_remote_folders(remote_name: str, path: str = ""):
         from .rclone_runner import RcloneRunner
         
         runner = RcloneRunner()
+        logger.info("API: browse folders request remote='%s' path='%s'", remote_name, path)
         folders = runner.list_folders(remote_name, path)
+        logger.info(
+            "API: browse folders response remote='%s' path='%s' count=%d",
+            remote_name,
+            path,
+            len(folders)
+        )
         
         return {
             "status": "success",
+            "success": True,
             "folders": folders,
             "remote": remote_name,
             "path": path
@@ -1278,6 +1286,7 @@ async def browse_remote_folders(remote_name: str, path: str = ""):
         logger.error(f"Failed to browse folders: {e}")
         return {
             "status": "error",
+            "success": False,
             "error": str(e),
             "folders": []
         }

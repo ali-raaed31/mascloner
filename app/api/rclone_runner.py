@@ -496,6 +496,7 @@ class RcloneRunner:
                 "rclone", "lsd", remote_path, "--max-depth=1",
                 f"--config={rclone_conf}"
             ]
+            logger.info("RcloneRunner: listing folders remote='%s' path='%s'", remote_name, path)
             
             result = subprocess.run(
                 base_cmd,
@@ -507,6 +508,12 @@ class RcloneRunner:
             if result.returncode != 0 and self._remote_supports_shared_drives(remote_name):
                 # Retry listing with shared-drive visibility for Google Workspace accounts
                 gworkspace_cmd = base_cmd + ["--drive-shared-with-me"]
+                logger.warning(
+                    "RcloneRunner: initial lsd failed for remote='%s' path='%s' stderr='%s'. Retrying with --drive-shared-with-me",
+                    remote_name,
+                    path,
+                    result.stderr.strip() if result.stderr else ""
+                )
                 retry = subprocess.run(
                     gworkspace_cmd,
                     capture_output=True,
@@ -521,6 +528,12 @@ class RcloneRunner:
                         retry.stderr or "unknown error"
                     )
                     return []
+                else:
+                    logger.info(
+                        "RcloneRunner: shared-with-me retry succeeded remote='%s' path='%s'",
+                        remote_name,
+                        path
+                    )
             
             if result.returncode != 0:
                 logger.error(f"Failed to list folders: {result.stderr}")
@@ -537,7 +550,14 @@ class RcloneRunner:
                         full_path = f"{path}/{folder_name}" if path else folder_name
                         folders.append(full_path)
             
-            return sorted(folders)
+            sorted_folders = sorted(folders)
+            logger.info(
+                "RcloneRunner: returning %d folders for remote='%s' path='%s'",
+                len(sorted_folders),
+                remote_name,
+                path
+            )
+            return sorted_folders
             
         except Exception as e:
             logger.error(f"Failed to list folders: {e}")
@@ -645,6 +665,11 @@ class RcloneRunner:
             remote_settings = config_dump.get(key)
             remote_type = remote_settings.get("type") if isinstance(remote_settings, dict) else None
             self._remote_type_cache[key] = remote_type
+            logger.info(
+                "RcloneRunner: remote '%s' detected as type '%s'",
+                key,
+                remote_type
+            )
             return remote_type
         
         except Exception as e:

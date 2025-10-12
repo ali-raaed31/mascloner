@@ -7,6 +7,7 @@ Smart guided setup flow that checks existing configurations.
 import streamlit as st
 from typing import Dict, Any, Optional
 import json
+import logging
 from components.google_drive_setup import GoogleDriveSetup
 
 # Page config
@@ -25,6 +26,7 @@ from api_client import APIClient
 
 # Initialize API client
 api = APIClient()
+logger = logging.getLogger(__name__)
 
 st.title("🧙‍♂️ MasCloner Setup Wizard")
 
@@ -376,6 +378,14 @@ else:
             st.session_state.setup_step = 3  # Start with sync paths
         else:
             st.session_state.setup_step = 4  # Final step
+    else:
+        # Auto-advance when a step has been completed
+        if st.session_state.setup_step == 1 and config_status["google_drive"]:
+            st.session_state.setup_step = 2
+        if st.session_state.setup_step == 2 and config_status["nextcloud"]:
+            st.session_state.setup_step = 3
+        if st.session_state.setup_step == 3 and config_status["sync_config"]:
+            st.session_state.setup_step = 4
     
     if "setup_data" not in st.session_state:
         st.session_state.setup_data = {}
@@ -500,10 +510,19 @@ else:
             # Browse Google Drive folders
             if st.button("🔍 Browse Google Drive Folders", use_container_width=True):
                 with st.spinner("Loading Google Drive folders..."):
+                    logger.info("UI: requesting Google Drive folders (remote=gdrive, path='')")
                     folders = api.browse_folders("gdrive")
-                    if folders and folders.get("success"):
+                    if folders and (folders.get("success") or folders.get("status") == "success"):
                         st.session_state.gdrive_folders = folders.get("folders", [])
+                        logger.info(
+                            "UI: received %d Google Drive folders",
+                            len(st.session_state.gdrive_folders)
+                        )
                     else:
+                        logger.warning(
+                            "UI: failed to load Google Drive folders response=%s",
+                            folders
+                        )
                         st.error("Failed to load Google Drive folders")
             
             # Show folder selection
@@ -526,10 +545,19 @@ else:
             # Browse Nextcloud folders
             if st.button("🔍 Browse Nextcloud Folders", use_container_width=True):
                 with st.spinner("Loading Nextcloud folders..."):
+                    logger.info("UI: requesting Nextcloud folders (remote=ncwebdav, path='')")
                     folders = api.browse_folders("ncwebdav")
-                    if folders and folders.get("success"):
+                    if folders and (folders.get("success") or folders.get("status") == "success"):
                         st.session_state.nc_folders = folders.get("folders", [])
+                        logger.info(
+                            "UI: received %d Nextcloud folders",
+                            len(st.session_state.nc_folders)
+                        )
                     else:
+                        logger.warning(
+                            "UI: failed to load Nextcloud folders response=%s",
+                            folders
+                        )
                         st.error("Failed to load Nextcloud folders")
             
             # Show folder selection
