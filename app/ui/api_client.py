@@ -150,6 +150,10 @@ class APIClient:
         """Remove Google Drive configuration."""
         return self._make_request("DELETE", "/oauth/google-drive")
     
+    def remove_remote(self, remote_name: str) -> Optional[Dict[str, Any]]:
+        """Remove an rclone remote."""
+        return self._make_request("DELETE", f"/remotes/{remote_name}")
+    
     def validate_config(self) -> Optional[Dict[str, Any]]:
         """Validate configuration."""
         return self._make_request("GET", "/config/validate")

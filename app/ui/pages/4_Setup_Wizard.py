@@ -208,8 +208,13 @@ if config_status["all_configured"]:
                                     reset_success = False
                             
                             if reset_nextcloud:
-                                # TODO: Add API endpoint to remove Nextcloud config
-                                st.warning("Nextcloud reset not yet implemented - use Settings to reconfigure")
+                                current_config = api.get_config() or {}
+                                nc_remote_name = current_config.get("nc_remote") or "ncwebdav"
+                                
+                                result = api.remove_remote(nc_remote_name)
+                                if not (result and result.get("success")):
+                                    st.error("Failed to remove Nextcloud remote. Please verify in rclone config.")
+                                    reset_success = False
                             
                             if reset_sync:
                                 # Clear sync configuration
@@ -275,8 +280,15 @@ if config_status["all_configured"]:
                         # Reset database first
                         db_result = api.reset_database()
                         
+                        # Capture current configuration for remote names before clearing
+                        current_config = api.get_config() or {}
+                        nc_remote_name = current_config.get("nc_remote") or "ncwebdav"
+                        
                         # Reset Google Drive config
                         gdrive_result = api.remove_google_drive_config()
+                        
+                        # Remove Nextcloud remote
+                        nextcloud_result = api.remove_remote(nc_remote_name)
                         
                         # Clear sync configuration
                         clear_config = {
@@ -287,13 +299,31 @@ if config_status["all_configured"]:
                         }
                         config_result = api.update_config(clear_config)
                         
-                        if db_result and db_result.get("success"):
+                        operations_ok = (
+                            db_result and db_result.get("success") and
+                            gdrive_result and gdrive_result.get("success") and
+                            config_result and config_result.get("success") and
+                            (nextcloud_result and nextcloud_result.get("success"))
+                        )
+                        
+                        if operations_ok:
                             st.success("✅ Full reset completed!")
                             st.info("🔄 Please refresh the page to start the setup wizard")
                             st.session_state.show_full_reset = False
                             st.rerun()
                         else:
-                            st.error("❌ Reset failed")
+                            issues = []
+                            if not (db_result and db_result.get("success")):
+                                issues.append("database reset")
+                            if not (gdrive_result and gdrive_result.get("success")):
+                                issues.append("Google Drive removal")
+                            if not (nextcloud_result and nextcloud_result.get("success")):
+                                issues.append("Nextcloud remote removal")
+                            if not (config_result and config_result.get("success")):
+                                issues.append("config update")
+                            
+                            detail = ", ".join(issues) if issues else "unknown error"
+                            st.error(f"❌ Reset failed ({detail})")
             
             with col2:
                 if st.button("❌ Cancel", use_container_width=True):

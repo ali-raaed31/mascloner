@@ -491,17 +491,35 @@ class RcloneRunner:
         try:
             rclone_conf = get_rclone_conf_path()
             remote_path = f"{remote_name}:{path}" if path else f"{remote_name}:"
-            cmd = [
+            base_cmd = [
                 "rclone", "lsd", remote_path, "--max-depth=1",
                 f"--config={rclone_conf}"
             ]
             
             result = subprocess.run(
-                cmd,
+                base_cmd,
                 capture_output=True,
                 text=True,
                 timeout=30
             )
+            
+            if result.returncode != 0 and remote_name.lower().startswith("gdrive"):
+                # Retry listing with shared-drive visibility for Google Workspace accounts
+                gworkspace_cmd = base_cmd + ["--drive-shared-with-me"]
+                retry = subprocess.run(
+                    gworkspace_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if retry.returncode == 0:
+                    result = retry
+                else:
+                    logger.error(
+                        "Failed to list Google Drive folders (shared-with-me retry): %s",
+                        retry.stderr or "unknown error"
+                    )
+                    return []
             
             if result.returncode != 0:
                 logger.error(f"Failed to list folders: {result.stderr}")
@@ -580,6 +598,15 @@ class RcloneRunner:
         except Exception as e:
             logger.error(f"Failed to remove remote {remote_name}: {e}")
             return False
+
+    def remove_remote(self, remote_name: str) -> bool:
+        """Public wrapper to remove rclone remote configurations."""
+        removed = self._remove_remote(remote_name)
+        if removed:
+            logger.info("rclone remote '%s' removed", remote_name)
+        else:
+            logger.warning("Unable to remove rclone remote '%s'", remote_name)
+        return removed
 
 
 # Global runner instance

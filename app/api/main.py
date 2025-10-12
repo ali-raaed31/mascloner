@@ -370,6 +370,32 @@ async def remove_google_drive_config():
         )
 
 
+@app.delete("/remotes/{remote_name}", response_model=ApiResponse)
+async def remove_remote(remote_name: str):
+    """Remove an rclone remote configuration by name."""
+    try:
+        from .rclone_runner import RcloneRunner
+        
+        runner = RcloneRunner()
+        if runner.remove_remote(remote_name):
+            return ApiResponse(
+                success=True,
+                message=f"Remote '{remote_name}' removed successfully"
+            )
+        else:
+            return ApiResponse(
+                success=False,
+                message=f"Failed to remove remote '{remote_name}'"
+            )
+            
+    except Exception as e:
+        logger.error(f"Remote removal error ({remote_name}): {e}")
+        return ApiResponse(
+            success=False,
+            message=f"Removal error: {str(e)}"
+        )
+
+
 # Status endpoint
 @app.get("/status", response_model=StatusResponse)
 async def get_status(db: Session = Depends(get_db)):
