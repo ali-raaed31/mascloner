@@ -214,15 +214,26 @@ with tab1:
 with tab2:
     st.header("🔗 Remote Connection Testing")
     
+    sync_config_values = api.get_config() or {}
+    gdrive_status = api.get_google_drive_status() or {}
+    gdrive_remote_name = (
+        sync_config_values.get("gdrive_remote")
+        or gdrive_status.get("remote_name")
+        or "gdrive"
+    )
+    nextcloud_remote_name = (
+        sync_config_values.get("nc_remote")
+        or "ncwebdav"
+    )
+    
     # Google Drive testing
     st.subheader("📱 Google Drive")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        gdrive_status = api.get_google_drive_status()
         if gdrive_status and gdrive_status.get("configured"):
-            st.success("✅ Google Drive is configured and connected")
+            st.success(f"✅ Google Drive remote `{gdrive_remote_name}` is configured and connected")
             if gdrive_status.get("folders"):
                 with st.expander("📁 Available folders (first 10)"):
                     for folder in gdrive_status["folders"][:10]:
@@ -258,7 +269,7 @@ with tab2:
     with col2:
         if st.button("🧪 Test Nextcloud", use_container_width=True):
             with st.spinner("Testing Nextcloud..."):
-                result = api.test_nextcloud("ncwebdav")  # Default remote name
+                result = api.test_nextcloud(nextcloud_remote_name)
                 if result and result.get("success"):
                     st.success("✅ Nextcloud connection OK")
                 else:

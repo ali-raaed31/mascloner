@@ -522,18 +522,17 @@ class RcloneRunner:
                 )
                 if retry.returncode == 0:
                     result = retry
+                    logger.info(
+                        "RcloneRunner: shared-with-me retry succeeded remote='%s' path='%s'",
+                        remote_name,
+                        path
+                    )
                 else:
                     logger.error(
                         "Failed to list Google Drive folders (shared-with-me retry): %s",
                         retry.stderr or "unknown error"
                     )
                     return []
-                else:
-                    logger.info(
-                        "RcloneRunner: shared-with-me retry succeeded remote='%s' path='%s'",
-                        remote_name,
-                        path
-                    )
             
             if result.returncode != 0:
                 logger.error(f"Failed to list folders: {result.stderr}")

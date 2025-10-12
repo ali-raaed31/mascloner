@@ -501,6 +501,26 @@ else:
         st.header("🔄 Step 3: Sync Path Configuration")
         st.markdown("Configure which folders to sync between Google Drive and Nextcloud.")
         
+        # Determine remote names to use for browsing
+        sync_config_existing = api.get_config() or {}
+        gdrive_status = api.get_google_drive_status() or {}
+        gdrive_remote_name = (
+            sync_config_existing.get("gdrive_remote")
+            or st.session_state.setup_data.get("google_drive", {}).get("remote_name")
+            or gdrive_status.get("remote_name")
+            or "gdrive"
+        )
+        nextcloud_remote_name = (
+            sync_config_existing.get("nc_remote")
+            or st.session_state.setup_data.get("nextcloud", {}).get("remote_name")
+            or "ncwebdav"
+        )
+        logger.info(
+            "UI: using remotes gdrive='%s', nextcloud='%s' for sync configuration browse",
+            gdrive_remote_name,
+            nextcloud_remote_name
+        )
+        
         # Get available folders for selection
         col1, col2 = st.columns(2)
         
@@ -510,17 +530,22 @@ else:
             # Browse Google Drive folders
             if st.button("🔍 Browse Google Drive Folders", use_container_width=True):
                 with st.spinner("Loading Google Drive folders..."):
-                    logger.info("UI: requesting Google Drive folders (remote=gdrive, path='')")
-                    folders = api.browse_folders("gdrive")
+                    logger.info(
+                        "UI: requesting Google Drive folders (remote=%s, path='')",
+                        gdrive_remote_name
+                    )
+                    folders = api.browse_folders(gdrive_remote_name)
                     if folders and (folders.get("success") or folders.get("status") == "success"):
                         st.session_state.gdrive_folders = folders.get("folders", [])
                         logger.info(
-                            "UI: received %d Google Drive folders",
-                            len(st.session_state.gdrive_folders)
+                            "UI: received %d Google Drive folders for remote %s",
+                            len(st.session_state.gdrive_folders),
+                            gdrive_remote_name
                         )
                     else:
                         logger.warning(
-                            "UI: failed to load Google Drive folders response=%s",
+                            "UI: failed to load Google Drive folders remote=%s response=%s",
+                            gdrive_remote_name,
                             folders
                         )
                         st.error("Failed to load Google Drive folders")
@@ -545,17 +570,22 @@ else:
             # Browse Nextcloud folders
             if st.button("🔍 Browse Nextcloud Folders", use_container_width=True):
                 with st.spinner("Loading Nextcloud folders..."):
-                    logger.info("UI: requesting Nextcloud folders (remote=ncwebdav, path='')")
-                    folders = api.browse_folders("ncwebdav")
+                    logger.info(
+                        "UI: requesting Nextcloud folders (remote=%s, path='')",
+                        nextcloud_remote_name
+                    )
+                    folders = api.browse_folders(nextcloud_remote_name)
                     if folders and (folders.get("success") or folders.get("status") == "success"):
                         st.session_state.nc_folders = folders.get("folders", [])
                         logger.info(
-                            "UI: received %d Nextcloud folders",
-                            len(st.session_state.nc_folders)
+                            "UI: received %d Nextcloud folders for remote %s",
+                            len(st.session_state.nc_folders),
+                            nextcloud_remote_name
                         )
                     else:
                         logger.warning(
-                            "UI: failed to load Nextcloud folders response=%s",
+                            "UI: failed to load Nextcloud folders remote=%s response=%s",
+                            nextcloud_remote_name,
                             folders
                         )
                         st.error("Failed to load Nextcloud folders")
@@ -580,15 +610,23 @@ else:
             
             if st.button("📊 Estimate Sync Size", use_container_width=True):
                 with st.spinner("Calculating sync size..."):
-                    size_result = api.estimate_size(f"gdrive:{selected_folder}", f"ncwebdav:{dest_folder}")
-                    if size_result and size_result.get("success"):
-                        data = size_result.get("data", {})
-                        total_size = data.get("total_size", 0)
-                        file_count = data.get("file_count", 0)
-                        
-                        size_mb = total_size / 1024 / 1024
+                    source_path = f"{gdrive_remote_name}:{selected_folder}"
+                    dest_path = f"{nextcloud_remote_name}:{dest_folder}"
+                    logger.info(
+                        "UI: estimating sync size source='%s' dest='%s'",
+                        source_path,
+                        dest_path
+                    )
+                    size_result = api.estimate_size(source_path, dest_path)
+                    if size_result and (size_result.get("success") or size_result.get("status") == "success"):
+                        file_count = size_result.get("file_count", 0)
+                        size_mb = size_result.get("size_mb", 0)
                         st.info(f"📊 **Estimated sync**: {file_count:,} files, {size_mb:.1f} MB")
                     else:
+                        logger.warning(
+                            "UI: size estimation failed response=%s",
+                            size_result
+                        )
                         st.warning("Could not estimate sync size")
             
             # Save configuration
@@ -596,9 +634,9 @@ else:
             
             if st.button("💾 Save Sync Configuration", type="primary", use_container_width=True):
                 sync_config = {
-                    "gdrive_remote": "gdrive",
+                    "gdrive_remote": gdrive_remote_name,
                     "gdrive_src": selected_folder,
-                    "nc_remote": "ncwebdav", 
+                    "nc_remote": nextcloud_remote_name, 
                     "nc_dest_path": dest_folder
                 }
                 
