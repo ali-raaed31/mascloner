@@ -26,6 +26,12 @@ api = APIClient()
 
 st.title("🛠️ MasCloner Setup & Configuration")
 
+
+def _rerun() -> None:
+    rerun_fn = getattr(st, "experimental_rerun", None) or getattr(st, "rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
 # --- Helpers -----------------------------------------------------------------
 
 
@@ -95,7 +101,7 @@ def render_google_drive_tab():
         with col_actions[0]:
             if st.button("🔄 Reconfigure", key="gdrive_reconfigure_btn", use_container_width=True):
                 st.session_state.gdrive_reconfigure = True
-                st.experimental_rerun()
+                _rerun()
         with col_actions[1]:
             if st.button("🧪 Test connection", key="gdrive_test_btn", use_container_width=True):
                 with st.spinner("Testing Google Drive..."):
@@ -111,7 +117,7 @@ def render_google_drive_tab():
                     if result and result.get("success"):
                         st.success("✅ Removed. Please reconfigure.")
                         st.session_state.gdrive_reconfigure = True
-                        st.experimental_rerun()
+                        _rerun()
                     else:
                         st.error("❌ Failed to remove Google Drive configuration")
         return
@@ -122,7 +128,7 @@ def render_google_drive_tab():
     if setup_complete:
         st.success("✅ Google Drive configured successfully!")
         st.session_state.pop("gdrive_reconfigure", None)
-        st.experimental_rerun()
+        _rerun()
 
 
 def render_nextcloud_tab():
@@ -137,7 +143,7 @@ def render_nextcloud_tab():
         st.success("✅ Nextcloud remote detected")
         if st.button("🔄 Reconfigure Nextcloud", use_container_width=True):
             st.session_state.nextcloud_reconfigure = True
-            st.experimental_rerun()
+            _rerun()
         return
 
     st.info("Enter your Nextcloud WebDAV details to (re)create the rclone remote.")
@@ -176,7 +182,7 @@ def render_nextcloud_tab():
         if result and result.get("success"):
             st.success("✅ Nextcloud remote verified and saved!")
             st.session_state.pop("nextcloud_reconfigure", None)
-            st.experimental_rerun()
+            _rerun()
         else:
             st.error(f"❌ Nextcloud test failed: {result.get('message', 'Unknown error') if result else 'API error'}")
 

@@ -45,7 +45,7 @@ class FolderPicker:
                     parent_path,
                 )
                 self._update_levels(levels[:index])
-                st.experimental_rerun()
+                self._trigger_rerun()
             dropdown_specs.append((index, parent_path, options, current_path))
 
         parent_path = levels[-1] if levels else ""
@@ -83,7 +83,7 @@ class FolderPicker:
                     if selection:
                         new_levels.append(selection)
                     self._update_levels(new_levels)
-                    st.experimental_rerun()
+                    self._trigger_rerun()
 
         manual_key = f"{self.state_key}_manual_override"
         manual_value = st.text_input(
@@ -158,3 +158,9 @@ class FolderPicker:
         if len(parts) == 1:
             return parts[0]
         return f"{parts[-1]} ({'/'.join(parts[:-1])})"
+
+    @staticmethod
+    def _trigger_rerun() -> None:
+        rerun_fn = getattr(st, "experimental_rerun", None) or getattr(st, "rerun", None)
+        if rerun_fn:
+            rerun_fn()

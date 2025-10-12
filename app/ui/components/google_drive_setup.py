@@ -134,7 +134,7 @@ class GoogleDriveSetup:
                 success = self._remove_gdrive_config()
                 if success:
                     st.success("✅ Google Drive configuration removed")
-                    st.experimental_rerun()
+                    self._trigger_rerun()
                 else:
                     st.error("❌ Failed to remove configuration")
         
@@ -295,6 +295,12 @@ class GoogleDriveSetup:
             
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _trigger_rerun() -> None:
+        rerun_fn = getattr(st, "experimental_rerun", None) or getattr(st, "rerun", None)
+        if rerun_fn:
+            rerun_fn()
 
 # Example usage in Setup Wizard
 def render_google_drive_step(api_client):
