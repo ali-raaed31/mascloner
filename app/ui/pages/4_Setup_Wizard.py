@@ -381,8 +381,6 @@ else:
             if st.button("⚙️ Open Settings", use_container_width=True):
                 st.switch_page("pages/2_Settings.py")
 
-FolderPicker.render_active_modal()
-
 # Help section
 st.markdown("---")
 
