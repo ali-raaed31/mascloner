@@ -5,7 +5,7 @@ Smart guided setup flow that checks existing configurations.
 """
 
 import streamlit as st
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import json
 import logging
 from components.google_drive_setup import GoogleDriveSetup
@@ -27,6 +27,318 @@ from api_client import APIClient
 # Initialize API client
 api = APIClient()
 logger = logging.getLogger(__name__)
+
+
+def _ensure_folder_state(key: str) -> Dict[str, Any]:
+    """Initialize and return folder picker state from session."""
+    if key not in st.session_state:
+        st.session_state[key] = {
+            "top_level": [],
+            "children": {},
+            "selected_top": "",
+            "selected_child": "",
+            "selected_path": ""
+        }
+    return st.session_state[key]
+
+
+def open_folder_modal(remote_name: str, state_key: str, label: str) -> None:
+    """Open modal for folder browsing."""
+    st.session_state["folder_modal"] = {
+        "open": True,
+        "remote": remote_name,
+        "state_key": state_key,
+        "label": label
+    }
+
+
+def close_folder_modal():
+    """Close folder modal."""
+    st.session_state.setdefault("folder_modal", {})["open"] = False
+
+
+def get_tree_state(state_key: str, remote_name: str) -> Dict[str, Any]:
+    """Get or initialize tree state for a folder picker."""
+    tree_states = st.session_state.setdefault("folder_tree_states", {})
+    state = tree_states.get(state_key)
+    if not state or state.get("remote") != remote_name:
+        state = {
+            "remote": remote_name,
+            "nodes": {},
+            "expanded": set(),
+            "selected_temp": "",
+            "last_error": None
+        }
+        tree_states[state_key] = state
+    return state
+
+
+def _sanitize_path(path: str) -> str:
+    return path.replace("/", "_slash_").replace(" ", "_space_")
+
+
+def load_children_for_path(remote_name: str, state_key: str, path: str) -> List[str]:
+    """Load child folders for a specific path into tree state."""
+    tree_state = get_tree_state(state_key, remote_name)
+    try:
+        response = api.browse_folders(remote_name, path=path)
+        if response and (response.get("success") or response.get("status") == "success"):
+            children = sorted(response.get("folders", []))
+            tree_state["nodes"][path] = {
+                "children": children,
+                "fetched": True
+            }
+            logger.info(
+                "UI: modal loaded %d children for remote=%s path='%s'",
+                len(children),
+                remote_name,
+                path or "/"
+            )
+            return children
+        else:
+            tree_state["nodes"][path] = {
+                "children": [],
+                "fetched": True
+            }
+            tree_state["last_error"] = response
+            logger.warning(
+                "UI: modal failed to load children for remote=%s path='%s' response=%s",
+                remote_name,
+                path or "/",
+                response
+            )
+            return []
+    except Exception as exc:
+        tree_state["nodes"][path] = {
+            "children": [],
+            "fetched": True
+        }
+        tree_state["last_error"] = str(exc)
+        logger.exception(
+            "UI: modal encountered error loading children remote=%s path='%s'",
+            remote_name,
+            path or "/"
+        )
+        return []
+
+
+def ensure_children_loaded(remote_name: str, state_key: str, path: str) -> List[str]:
+    tree_state = get_tree_state(state_key, remote_name)
+    node = tree_state["nodes"].get(path)
+    if not node or not node.get("fetched"):
+        return load_children_for_path(remote_name, state_key, path)
+    return node["children"]
+
+
+def set_modal_style():
+    if not st.session_state.get("_modal_style_injected"):
+        st.markdown(
+            """
+            <style>
+            .mc-modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(10, 13, 23, 0.72);
+                z-index: 1000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .mc-modal-box {
+                width: min(92vw, 720px);
+                max-height: 85vh;
+                background: #0f172a;
+                border-radius: 18px;
+                padding: 24px;
+                box-shadow: 0 24px 60px rgba(15, 23, 42, 0.45);
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                display: flex;
+                flex-direction: column;
+            }
+            .mc-modal-scroll {
+                margin-top: 16px;
+                padding: 8px 12px;
+                border-radius: 12px;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                background: rgba(15, 23, 42, 0.6);
+                overflow-y: auto;
+                flex: 1;
+            }
+            .mc-modal-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 4px 0;
+            }
+            .mc-modal-selected {
+                margin-top: 12px;
+                font-size: 0.9rem;
+                color: rgba(226, 232, 240, 0.85);
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+        st.session_state["_modal_style_injected"] = True
+
+
+def render_tree_nodes(remote_name: str, state_key: str, path: str, level: int = 0):
+    tree_state = get_tree_state(state_key, remote_name)
+    children = ensure_children_loaded(remote_name, state_key, path)
+    if not children:
+        if path and tree_state.get("last_error"):
+            st.warning(f"Could not load subfolders for `{path}`")
+        return
+    
+    indent_symbol = "\u2003" * level  # em space for indentation
+    
+    for child in children:
+        child_path = f"{path}/{child}".strip("/")
+        child_key = _sanitize_path(child_path or child)
+        child_node = tree_state["nodes"].get(child_path, {"children": [], "fetched": False})
+        expanded = child_path in tree_state["expanded"]
+        has_children = bool(child_node.get("children")) if child_node.get("fetched") else True
+        
+        cols = st.columns([0.12, 0.68, 0.2], gap="small")
+        toggle_label = f"{indent_symbol}{'▾' if expanded else '▸'}"
+        select_label = f"{indent_symbol}{'📂' if expanded else '📁'} {child}"
+        
+        with cols[0]:
+            if st.button(
+                toggle_label,
+                key=f"{state_key}_toggle_{child_key}",
+                disabled=not has_children
+            ):
+                if expanded:
+                    tree_state["expanded"].discard(child_path)
+                else:
+                    tree_state["expanded"].add(child_path)
+                    ensure_children_loaded(remote_name, state_key, child_path)
+        
+        with cols[1]:
+            if st.button(
+                select_label,
+                key=f"{state_key}_select_{child_key}"
+            ):
+                tree_state["selected_temp"] = child_path
+        
+        with cols[2]:
+            if child_path == tree_state.get("selected_temp"):
+                st.success("Selected", icon="✅")
+            elif not has_children and child_node.get("fetched"):
+                st.caption("Empty")
+            else:
+                st.write("")
+        
+        if expanded:
+            render_tree_nodes(remote_name, state_key, child_path, level + 1)
+
+
+def render_folder_modal():
+    modal = st.session_state.get("folder_modal")
+    if not modal or not modal.get("open"):
+        return
+    
+    remote_name = modal["remote"]
+    state_key = modal["state_key"]
+    label = modal["label"]
+    
+    tree_state = get_tree_state(state_key, remote_name)
+    picker_state = _ensure_folder_state(state_key)
+    if not tree_state.get("selected_temp"):
+        tree_state["selected_temp"] = picker_state.get("selected_path", "")
+    
+    ensure_children_loaded(remote_name, state_key, "")
+    set_modal_style()
+    
+    st.markdown("<div class='mc-modal-overlay'>", unsafe_allow_html=True)
+    modal_container = st.container()
+    with modal_container:
+        st.markdown("<div class='mc-modal-box'>", unsafe_allow_html=True)
+        st.subheader(f"{label} Folder Explorer")
+        st.caption("Click ▸ to expand folders. Select a folder, then confirm.")
+        
+        st.markdown("<div class='mc-modal-scroll'>", unsafe_allow_html=True)
+        render_tree_nodes(remote_name, state_key, "")
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        current = tree_state.get("selected_temp", "")
+        st.markdown(
+            f"<div class='mc-modal-selected'>Current selection: "
+            f"{'`' + current + '`' if current else 'None selected'}</div>",
+            unsafe_allow_html=True
+        )
+        
+        col1, col2, col3 = st.columns([0.3, 0.35, 0.35])
+        with col1:
+            if st.button("Close", key=f"{state_key}_modal_close"):
+                close_folder_modal()
+                st.experimental_rerun()
+        with col2:
+            if st.button("Clear selection", key=f"{state_key}_modal_clear"):
+                tree_state["selected_temp"] = ""
+                picker_state["selected_path"] = ""
+                manual_key = f"{state_key}_manual"
+                st.session_state[manual_key] = ""
+        with col3:
+            if st.button(
+                "Use folder",
+                key=f"{state_key}_modal_use",
+                type="primary",
+                disabled=not current
+            ):
+                picker_state["selected_path"] = current
+                manual_key = f"{state_key}_manual"
+                st.session_state[manual_key] = current
+                close_folder_modal()
+                st.experimental_rerun()
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_remote_folder_picker(
+    remote_label: str,
+    remote_name: str,
+    state_key: str,
+    placeholder: str
+) -> str:
+    """Render folder picker with modal tree explorer and manual override."""
+    state = _ensure_folder_state(state_key)
+    manual_key = f"{state_key}_manual"
+    st.session_state.setdefault(manual_key, state["selected_path"])
+    
+    cols = st.columns([0.65, 0.35])
+    with cols[0]:
+        selected_value = st.text_input(
+            f"{remote_label} path",
+            key=manual_key,
+            placeholder=placeholder
+        ).strip()
+    with cols[1]:
+        colb1, colb2 = st.columns([0.55, 0.45])
+        with colb1:
+            st.button(
+                f"🌲 Browse {remote_label}",
+                key=f"{state_key}_open_modal",
+                use_container_width=True,
+                on_click=open_folder_modal,
+                args=(remote_name, state_key, remote_label)
+            )
+        with colb2:
+            if st.button("Clear", key=f"{state_key}_clear", use_container_width=True):
+                selected_value = ""
+                st.session_state[manual_key] = ""
+                tree_state = st.session_state.get("folder_tree_states", {}).get(state_key)
+                if tree_state:
+                    tree_state["selected_temp"] = ""
+    state["selected_path"] = selected_value
+    if selected_value:
+        st.caption(f"Selected {remote_label} path: `{selected_value}`")
+    return state["selected_path"]
 
 st.title("🧙‍♂️ MasCloner Setup Wizard")
 
@@ -526,83 +838,21 @@ else:
         
         with col1:
             st.subheader("📱 Google Drive Source")
-            
-            # Browse Google Drive folders
-            if st.button("🔍 Browse Google Drive Folders", use_container_width=True):
-                with st.spinner("Loading Google Drive folders..."):
-                    logger.info(
-                        "UI: requesting Google Drive folders (remote=%s, path='')",
-                        gdrive_remote_name
-                    )
-                    folders = api.browse_folders(gdrive_remote_name)
-                    if folders and (folders.get("success") or folders.get("status") == "success"):
-                        st.session_state.gdrive_folders = folders.get("folders", [])
-                        logger.info(
-                            "UI: received %d Google Drive folders for remote %s",
-                            len(st.session_state.gdrive_folders),
-                            gdrive_remote_name
-                        )
-                    else:
-                        logger.warning(
-                            "UI: failed to load Google Drive folders remote=%s response=%s",
-                            gdrive_remote_name,
-                            folders
-                        )
-                        st.error("Failed to load Google Drive folders")
-            
-            # Show folder selection
-            if "gdrive_folders" in st.session_state:
-                selected_folder = st.selectbox(
-                    "Select Google Drive folder",
-                    [""] + st.session_state.gdrive_folders,
-                    help="Choose the folder to sync from Google Drive"
-                )
-            else:
-                selected_folder = st.text_input(
-                    "Google Drive Source Path",
-                    placeholder="Shared drives/MyTeam/Documents",
-                    help="Path within Google Drive to sync from"
-                )
+            selected_folder = render_remote_folder_picker(
+                remote_label="Google Drive",
+                remote_name=gdrive_remote_name,
+                state_key="gdrive_folder_picker",
+                placeholder="Shared drives/MyTeam/Documents"
+            )
         
         with col2:
             st.subheader("☁️ Nextcloud Destination")
-            
-            # Browse Nextcloud folders
-            if st.button("🔍 Browse Nextcloud Folders", use_container_width=True):
-                with st.spinner("Loading Nextcloud folders..."):
-                    logger.info(
-                        "UI: requesting Nextcloud folders (remote=%s, path='')",
-                        nextcloud_remote_name
-                    )
-                    folders = api.browse_folders(nextcloud_remote_name)
-                    if folders and (folders.get("success") or folders.get("status") == "success"):
-                        st.session_state.nc_folders = folders.get("folders", [])
-                        logger.info(
-                            "UI: received %d Nextcloud folders for remote %s",
-                            len(st.session_state.nc_folders),
-                            nextcloud_remote_name
-                        )
-                    else:
-                        logger.warning(
-                            "UI: failed to load Nextcloud folders remote=%s response=%s",
-                            nextcloud_remote_name,
-                            folders
-                        )
-                        st.error("Failed to load Nextcloud folders")
-            
-            # Show folder selection
-            if "nc_folders" in st.session_state:
-                dest_folder = st.selectbox(
-                    "Select Nextcloud folder",
-                    [""] + st.session_state.nc_folders,
-                    help="Choose the destination folder in Nextcloud"
-                )
-            else:
-                dest_folder = st.text_input(
-                    "Nextcloud Destination Path",
-                    placeholder="Backups/GoogleDrive",
-                    help="Path within Nextcloud to sync to"
-                )
+            dest_folder = render_remote_folder_picker(
+                remote_label="Nextcloud",
+                remote_name=nextcloud_remote_name,
+                state_key="nextcloud_folder_picker",
+                placeholder="Backups/GoogleDrive"
+            )
         
         # Sync size estimation
         if selected_folder and dest_folder:
@@ -680,6 +930,8 @@ else:
         with col2:
             if st.button("⚙️ Open Settings", use_container_width=True):
                 st.switch_page("pages/2_Settings.py")
+
+render_folder_modal()
 
 # Help section
 st.markdown("---")
