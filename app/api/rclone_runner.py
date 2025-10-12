@@ -186,7 +186,7 @@ class RcloneRunner:
             "--stats-log-level=NOTICE",  # Ensure stats are included in JSON logs
             "--stats=30s",
             "--stats-one-line",
-            "--fast-list",
+            # Removed --fast-list as it can cause issues with some Google Drive folders
             f"--checkers={self.rclone_config['checkers']}",
             f"--transfers={self.rclone_config['transfers']}",
             f"--tpslimit={self.rclone_config['tpslimit']}",
@@ -221,11 +221,16 @@ class RcloneRunner:
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"sync-{timestamp}.log"
         
+        # Sanitize paths: strip leading/trailing whitespace
+        gdrive_src = gdrive_src.strip() if gdrive_src else ""
+        nc_dest_path = nc_dest_path.strip() if nc_dest_path else ""
+        
         # Build source and destination paths
         src = f"{gdrive_remote}:{gdrive_src}"
         dest = f"{nc_remote}:{nc_dest_path.rstrip('/')}/"
         
         logger.info(f"Starting sync: {src} -> {dest}")
+        logger.debug(f"Path details - gdrive_src: '{gdrive_src}' (len={len(gdrive_src)}), nc_dest_path: '{nc_dest_path}' (len={len(nc_dest_path)})")
         
         try:
             # Build command
@@ -257,6 +262,10 @@ class RcloneRunner:
         result = SyncResult(status="running")
         
         try:
+            # Log the exact command for debugging
+            logger.info(f"Command list has {len(cmd)} elements")
+            logger.debug(f"Command elements: {[repr(arg) for arg in cmd[:6]]}")  # First 6 elements with repr() to show quotes
+            
             # Start rclone process
             process = subprocess.Popen(
                 cmd,
