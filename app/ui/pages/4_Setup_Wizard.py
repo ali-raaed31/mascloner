@@ -38,6 +38,20 @@ notice = st.session_state.pop("setup_wizard_notice", None)
 if notice:
     st.success(notice)
 
+
+def prefill_folder_picker(state_key: str, remote_name: str, path: str) -> None:
+    if not path:
+        return
+    segments = [segment.strip() for segment in path.split("/") if segment.strip()]
+    if not segments:
+        return
+    breadcrumb_state = st.session_state.setdefault("breadcrumb_picker_state", {})
+    state = breadcrumb_state.get(state_key)
+    if not state or state.get("remote") != remote_name:
+        state = {"remote": remote_name, "levels": [], "children_cache": {}}
+        breadcrumb_state[state_key] = state
+    state["levels"] = ["/".join(segments[: idx + 1]) for idx in range(len(segments))]
+
 # Check API connection
 status = api.get_status()
 if not status:
@@ -102,32 +116,43 @@ def check_configuration_status():
 # Get configuration status
 config_status = check_configuration_status()
 
-if config_status["all_configured"]:
+reconfigure_mode = st.session_state.get("force_reconfigure", False)
+
+if config_status["all_configured"] and not reconfigure_mode:
     render_fully_configured_view(api, config_status)
+    st.markdown("---")
+    if st.button("🔄 Change Sync Paths", type="secondary", use_container_width=True):
+        st.session_state.force_reconfigure = True
+        st.session_state.setup_step = 3
+        st.session_state.setdefault("setup_data", {})
+        st.experimental_rerun()
 else:
     st.markdown("**Let's get MasCloner configured for your environment!**")
     render_configuration_checklist(config_status)
     
     st.markdown("---")
+    status_for_flow = config_status.copy()
+    if reconfigure_mode:
+        status_for_flow["sync_config"] = False
     
     # Setup steps state management
     if "setup_step" not in st.session_state:
         # Determine starting step based on what's already configured
-        if not config_status["google_drive"]:
+        if not status_for_flow["google_drive"]:
             st.session_state.setup_step = 1  # Start with Google Drive
-        elif not config_status["nextcloud"]:
+        elif not status_for_flow["nextcloud"]:
             st.session_state.setup_step = 2  # Start with Nextcloud
-        elif not config_status["sync_config"]:
+        elif not status_for_flow["sync_config"]:
             st.session_state.setup_step = 3  # Start with sync paths
         else:
             st.session_state.setup_step = 4  # Final step
     else:
         # Auto-advance when a step has been completed
-        if st.session_state.setup_step == 1 and config_status["google_drive"]:
+        if st.session_state.setup_step == 1 and status_for_flow["google_drive"]:
             st.session_state.setup_step = 2
-        if st.session_state.setup_step == 2 and config_status["nextcloud"]:
+        if st.session_state.setup_step == 2 and status_for_flow["nextcloud"]:
             st.session_state.setup_step = 3
-        if st.session_state.setup_step == 3 and config_status["sync_config"]:
+        if st.session_state.setup_step == 3 and status_for_flow["sync_config"]:
             st.session_state.setup_step = 4
     
     if "setup_data" not in st.session_state:
@@ -135,18 +160,18 @@ else:
     
     # Progress calculation (only count steps that need to be done)
     total_steps = sum([
-        1 if not config_status["google_drive"] else 0,
-        1 if not config_status["nextcloud"] else 0, 
-        1 if not config_status["sync_config"] else 0,
+        1 if not status_for_flow["google_drive"] else 0,
+        1 if not status_for_flow["nextcloud"] else 0, 
+        1 if not status_for_flow["sync_config"] else 0,
         1  # Final step
     ])
     
     current_step = 0
-    if config_status["google_drive"]:
+    if status_for_flow["google_drive"]:
         current_step += 1
-    if config_status["nextcloud"]:
+    if status_for_flow["nextcloud"]:
         current_step += 1
-    if config_status["sync_config"]:
+    if status_for_flow["sync_config"]:
         current_step += 1
     
     if st.session_state.setup_step == 1:
@@ -263,6 +288,11 @@ else:
             gdrive_remote_name,
             nextcloud_remote_name
         )
+
+        if sync_config_existing.get("gdrive_src"):
+            prefill_folder_picker("gdrive_folder_picker", gdrive_remote_name, sync_config_existing.get("gdrive_src", ""))
+        if sync_config_existing.get("nc_dest_path"):
+            prefill_folder_picker("nextcloud_folder_picker", nextcloud_remote_name, sync_config_existing.get("nc_dest_path", ""))
         
         # Get available folders for selection
         col1, col2 = st.columns(2)
@@ -345,6 +375,7 @@ else:
                     
                     if result and result.get("success"):
                         st.success("✅ Sync configuration saved!")
+                        st.session_state.pop("force_reconfigure", None)
                         st.session_state.setup_step = 4
                         st.rerun()
                     else:

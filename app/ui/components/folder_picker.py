@@ -28,17 +28,62 @@ class FolderPicker:
 
     def render(self) -> str:
         state = self._ensure_state()
-        segments = [segment for segment in state["segments"] if segment]
+        levels = state["levels"]
 
         st.markdown(f"**{self.config.label} path**")
-        breadcrumb = " › ".join(segments) if segments else "root"
+        breadcrumb = " › ".join(self._display_label(path) for path in levels) if levels else "root"
         st.caption(f"Current selection: `{breadcrumb}`")
 
-        total_levels = len(state["segments"]) + 1
-        columns = st.columns(total_levels if total_levels > 0 else 1)
-        for level in range(total_levels):
-            with columns[level]:
-                self._render_dropdown(level)
+        dropdown_specs = []
+        for index, current_path in enumerate(levels):
+            parent_path = levels[index - 1] if index > 0 else ""
+            options = self._load_options(parent_path)
+            if current_path and current_path not in options:
+                logger.warning(
+                    "FolderPicker: previously selected path '%s' missing under '%s', resetting",
+                    current_path,
+                    parent_path,
+                )
+                self._update_levels(levels[:index])
+                st.experimental_rerun()
+            dropdown_specs.append((index, parent_path, options, current_path))
+
+        parent_path = levels[-1] if levels else ""
+        next_options = self._load_options(parent_path)
+        if next_options:
+            dropdown_specs.append((len(levels), parent_path, next_options, ""))
+
+        if not dropdown_specs:
+            dropdown_specs.append((0, "", self._load_options(""), ""))
+
+        columns = st.columns(len(dropdown_specs))
+        for column, (level_idx, parent, options, current_value) in zip(columns, dropdown_specs):
+            with column:
+                options_with_current = options[:]
+                if current_value and current_value not in options_with_current:
+                    options_with_current.append(current_value)
+                options_with_current = sorted(set(options_with_current))
+                choices = [""] + options_with_current
+
+                try:
+                    index = choices.index(current_value)
+                except ValueError:
+                    index = 0
+
+                selection = st.selectbox(
+                    f"Level {level_idx + 1}",
+                    choices,
+                    index=index,
+                    format_func=self._display_label,
+                    key=f"{self.state_key}_level_{level_idx}",
+                )
+
+                if selection != current_value:
+                    new_levels = levels[:level_idx]
+                    if selection:
+                        new_levels.append(selection)
+                    self._update_levels(new_levels)
+                    st.experimental_rerun()
 
         manual_key = f"{self.state_key}_manual_override"
         manual_value = st.text_input(
@@ -56,30 +101,7 @@ class FolderPicker:
             )
             return manual_value
 
-        final_segments = [segment for segment in self._ensure_state()["segments"] if segment]
-        return "/".join(final_segments)
-
-    def _render_dropdown(self, level: int):
-        state = self._ensure_state()
-        segments = state["segments"]
-
-        parent_segments = [segment for segment in segments[:level] if segment]
-        parent_path = "/".join(parent_segments)
-        options = self._load_options(parent_path)
-
-        current_value = segments[level] if level < len(segments) else ""
-        choices = [""] + options
-
-        select_key = f"{self.state_key}_level_{level}"
-        selection = st.selectbox(
-            f"Level {level + 1}",
-            choices,
-            index=choices.index(current_value) if current_value in choices else 0,
-            key=select_key,
-        )
-
-        new_segments = parent_segments + ([selection] if selection else [])
-        st.session_state["breadcrumb_picker_state"][self.state_key]["segments"] = new_segments
+        return "/".join(self._ensure_state()["levels"])
 
     def _load_options(self, path: str) -> List[str]:
         state = self._ensure_state()
@@ -97,11 +119,8 @@ class FolderPicker:
         options: List[str] = []
         if response and (response.get("success") or response.get("status") == "success"):
             for entry in response.get("folders", []):
-                if not entry:
-                    continue
-                parts = entry.split("/")
-                child = parts[-1]
-                options.append(child)
+                if entry:
+                    options.append(entry)
         else:
             logger.warning(
                 "FolderPicker: failed to load folders remote=%s path='%s' response=%s",
@@ -121,9 +140,21 @@ class FolderPicker:
         if not state or state.get("remote") != self.config.remote_name:
             state = {
                 "remote": self.config.remote_name,
-                "segments": [],
+                "levels": [],
                 "children_cache": {},
             }
             picker_state[self.state_key] = state
             st.session_state[f"{self.state_key}_manual_override"] = ""
         return state
+
+    def _update_levels(self, levels: List[str]) -> None:
+        st.session_state.setdefault("breadcrumb_picker_state", {})[self.state_key]["levels"] = levels
+
+    @staticmethod
+    def _display_label(path: str) -> str:
+        if not path:
+            return "—"
+        parts = path.split("/")
+        if len(parts) == 1:
+            return parts[0]
+        return f"{parts[-1]} ({'/'.join(parts[:-1])})"
