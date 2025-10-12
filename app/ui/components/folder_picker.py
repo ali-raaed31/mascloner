@@ -28,7 +28,7 @@ class FolderPicker:
 
     def render(self) -> str:
         state = self._ensure_state()
-        levels = state["levels"]
+        levels = list(state["levels"])
 
         st.markdown(f"**{self.config.label} path**")
         breadcrumb = " › ".join(self._display_label(path) for path in levels) if levels else "root"
@@ -44,8 +44,10 @@ class FolderPicker:
                     current_path,
                     parent_path,
                 )
-                self._update_levels(levels[:index])
-                self._trigger_rerun()
+                levels = levels[:index]
+                self._update_levels(levels)
+                current_path = ""
+                options = self._load_options(parent_path)
             dropdown_specs.append((index, parent_path, options, current_path))
 
         parent_path = levels[-1] if levels else ""
@@ -82,8 +84,8 @@ class FolderPicker:
                     new_levels = levels[:level_idx]
                     if selection:
                         new_levels.append(selection)
-                    self._update_levels(new_levels)
-                    self._trigger_rerun()
+                    levels = new_levels
+                    self._update_levels(levels)
 
         manual_key = f"{self.state_key}_manual_override"
         manual_value = st.text_input(
@@ -148,7 +150,7 @@ class FolderPicker:
         return state
 
     def _update_levels(self, levels: List[str]) -> None:
-        st.session_state.setdefault("breadcrumb_picker_state", {})[self.state_key]["levels"] = levels
+        st.session_state.setdefault("breadcrumb_picker_state", {})[self.state_key]["levels"] = list(levels)
 
     @staticmethod
     def _display_label(path: str) -> str:
@@ -158,9 +160,3 @@ class FolderPicker:
         if len(parts) == 1:
             return parts[0]
         return f"{parts[-1]} ({'/'.join(parts[:-1])})"
-
-    @staticmethod
-    def _trigger_rerun() -> None:
-        rerun_fn = getattr(st, "experimental_rerun", None) or getattr(st, "rerun", None)
-        if rerun_fn:
-            rerun_fn()
