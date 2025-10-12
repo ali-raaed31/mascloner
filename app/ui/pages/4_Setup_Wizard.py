@@ -16,7 +16,6 @@ import streamlit as st
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api_client import APIClient  # noqa: E402
-from components.folder_picker import FolderPicker, PickerConfig  # noqa: E402
 from components.google_drive_setup import GoogleDriveSetup  # noqa: E402
 
 st.set_page_config(page_title="Setup - MasCloner", page_icon="🛠️", layout="wide")
@@ -35,21 +34,83 @@ def _rerun() -> None:
 # --- Helpers -----------------------------------------------------------------
 
 
-def prefill_picker(state_key: str, remote_name: str, path: str) -> None:
-    """Populate breadcrumb picker state when existing paths are present."""
-    if not path:
-        return
-    segments = [segment.strip() for segment in path.split("/") if segment.strip()]
-    if not segments:
-        return
+def fetch_remote_folders(remote_name: str, path: str) -> list[str]:
+    """Fetch immediate child folders for a remote path."""
+    try:
+        response = api.browse_folders(remote_name, path=path) if path else api.browse_folders(remote_name)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Failed to browse folders remote=%s path='%s': %s", remote_name, path, exc)
+        return []
 
-    picker_state = st.session_state.setdefault("breadcrumb_picker_state", {})
-    state = picker_state.get(state_key)
-    if not state or state.get("remote") != remote_name:
-        state = {"remote": remote_name, "levels": [], "children_cache": {}}
-        picker_state[state_key] = state
+    if not response:
+        return []
 
-    state["levels"] = ["/".join(segments[: idx + 1]) for idx in range(len(segments))]
+    if response.get("success") or response.get("status") == "success":
+        raw_folders = response.get("folders", []) or []
+        return sorted({folder.split("/")[-1] for folder in raw_folders if folder})
+
+    logger.warning(
+        "Browse folders returned failure for remote=%s path='%s': %s",
+        remote_name,
+        path,
+        response.get("error") or response.get("message"),
+    )
+    return []
+
+
+def render_path_editor(remote_label: str, remote_name: str, state_prefix: str, initial_path: str) -> str:
+    """Render a simple folder browser for a remote and return the selected path."""
+    path_key = f"{state_prefix}_path"
+    selected_key = f"{state_prefix}_child"
+    manual_key = f"{state_prefix}_manual"
+
+    if path_key not in st.session_state:
+        st.session_state[path_key] = initial_path.strip("/") if initial_path else ""
+    current_path = st.session_state[path_key]
+
+    st.markdown(f"**Current {remote_label} path:** `{current_path or '/'}`")
+
+    folders = fetch_remote_folders(remote_name, current_path)
+    if not folders:
+        st.info("No subfolders found for this location.")
+
+    st.session_state.setdefault(selected_key, "")
+    selected_child = st.selectbox(
+        f"{remote_label} subfolders",
+        [""] + folders,
+        key=selected_key,
+    )
+
+    col_open, col_up = st.columns(2)
+    with col_open:
+        if st.button("📂 Open folder", key=f"{state_prefix}_open", use_container_width=True, disabled=not selected_child):
+            new_path = "/".join(filter(None, [current_path, selected_child])).strip("/")
+            st.session_state[path_key] = new_path
+            st.session_state[selected_key] = ""
+            st.session_state[manual_key] = new_path
+            _rerun()
+
+    with col_up:
+        if st.button("⬆️ Go up", key=f"{state_prefix}_up", use_container_width=True, disabled=not current_path):
+            parent = "/".join(current_path.split("/")[:-1]).strip("/")
+            st.session_state[path_key] = parent
+            st.session_state[selected_key] = ""
+            st.session_state[manual_key] = parent
+            _rerun()
+
+    st.session_state.setdefault(manual_key, current_path)
+    manual_value = st.text_input(
+        "Manual path",
+        key=manual_key,
+        help="Paste a complete relative path if you already know it.",
+    ).strip()
+
+    if st.button("✅ Use manual path", key=f"{state_prefix}_apply_manual", use_container_width=True):
+        st.session_state[path_key] = manual_value
+        st.session_state[selected_key] = ""
+        _rerun()
+
+    return st.session_state[path_key]
 
 
 def render_summary_panel():
@@ -194,33 +255,23 @@ def render_paths_tab():
     gdrive_remote_name = config.get("gdrive_remote") or "gdrive"
     nextcloud_remote_name = config.get("nc_remote") or "ncwebdav"
 
-    prefill_picker("gdrive_folder_picker", gdrive_remote_name, config.get("gdrive_src", ""))
-    prefill_picker("nextcloud_folder_picker", nextcloud_remote_name, config.get("nc_dest_path", ""))
+    tab_source, tab_dest = st.tabs(["📱 Google Drive", "☁️ Nextcloud"])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        gdrive_picker = FolderPicker(
-            api_client=api,
-            state_key="gdrive_folder_picker",
-            config=PickerConfig(
-                remote_name=gdrive_remote_name,
-                label="Google Drive",
-                placeholder="Shared drives/MyTeam/Documents",
-            ),
+    with tab_source:
+        selected_source = render_path_editor(
+            remote_label="Google Drive",
+            remote_name=gdrive_remote_name,
+            state_prefix="gdrive",
+            initial_path=config.get("gdrive_src", ""),
         )
-        selected_source = gdrive_picker.render()
 
-    with col2:
-        nextcloud_picker = FolderPicker(
-            api_client=api,
-            state_key="nextcloud_folder_picker",
-            config=PickerConfig(
-                remote_name=nextcloud_remote_name,
-                label="Nextcloud",
-                placeholder="Backups/GoogleDrive",
-            ),
+    with tab_dest:
+        selected_dest = render_path_editor(
+            remote_label="Nextcloud",
+            remote_name=nextcloud_remote_name,
+            state_prefix="nextcloud",
+            initial_path=config.get("nc_dest_path", ""),
         )
-        selected_dest = nextcloud_picker.render()
 
     st.markdown("---")
     st.caption(
