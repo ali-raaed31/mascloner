@@ -28,6 +28,10 @@ api = APIClient()
 
 st.title("🧙‍♂️ MasCloner Setup Wizard")
 
+notice = st.session_state.pop("setup_wizard_notice", None)
+if notice:
+    st.success(notice)
+
 # Check API connection
 status = api.get_status()
 if not status:
@@ -468,16 +472,14 @@ else:
                         )
                         
                         if result and result.get("success"):
-                            st.success("✅ Nextcloud connection successful and remote created!")
                             st.session_state.setup_data["nextcloud"] = {
                                 "url": nc_url,
                                 "user": nc_user,
                                 "remote_name": remote_name
                             }
-                            
-                            if st.button("➡️ Continue to Sync Configuration", type="primary"):
-                                st.session_state.setup_step = 3
-                                st.rerun()
+                            st.session_state.setup_step = 3
+                            st.session_state["setup_wizard_notice"] = "✅ Nextcloud connection successful and remote created!"
+                            st.rerun()
                         else:
                             error_msg = result.get("message", "Unknown error") if result else "Connection failed"
                             st.error(f"❌ Nextcloud connection failed: {error_msg}")

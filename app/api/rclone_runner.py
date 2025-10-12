@@ -164,6 +164,7 @@ class RcloneRunner:
                 "drive_export": "docx,xlsx,pptx",
                 "log_level": "INFO",
             }
+        self._remote_type_cache: Dict[str, Optional[str]] = {}
     
     def build_rclone_command(
         self,
@@ -503,7 +504,7 @@ class RcloneRunner:
                 timeout=30
             )
             
-            if result.returncode != 0 and remote_name.lower().startswith("gdrive"):
+            if result.returncode != 0 and self._remote_supports_shared_drives(remote_name):
                 # Retry listing with shared-drive visibility for Google Workspace accounts
                 gworkspace_cmd = base_cmd + ["--drive-shared-with-me"]
                 retry = subprocess.run(
@@ -607,6 +608,49 @@ class RcloneRunner:
         else:
             logger.warning("Unable to remove rclone remote '%s'", remote_name)
         return removed
+
+    def _remote_supports_shared_drives(self, remote_name: str) -> bool:
+        """Check whether the remote is a Google Drive remote that can list shared drives."""
+        remote_type = self._get_remote_type(remote_name)
+        return remote_type == "drive"
+
+    def _get_remote_type(self, remote_name: str) -> Optional[str]:
+        """Inspect rclone config to determine the remote type."""
+        key = remote_name.rstrip(":")
+        if key in self._remote_type_cache:
+            return self._remote_type_cache[key]
+        
+        try:
+            rclone_conf = get_rclone_conf_path()
+            cmd = [
+                "rclone", "config", "dump",
+                f"--config={rclone_conf}"
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "Unable to inspect remote '%s' type: %s",
+                    key,
+                    result.stderr or "unknown error"
+                )
+                self._remote_type_cache[key] = None
+                return None
+            
+            config_dump = json.loads(result.stdout)
+            remote_settings = config_dump.get(key)
+            remote_type = remote_settings.get("type") if isinstance(remote_settings, dict) else None
+            self._remote_type_cache[key] = remote_type
+            return remote_type
+        
+        except Exception as e:
+            logger.error("Failed to determine remote '%s' type: %s", key, e)
+            self._remote_type_cache[key] = None
+            return None
 
 
 # Global runner instance
