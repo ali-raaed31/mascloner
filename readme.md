@@ -1,274 +1,206 @@
 # MasCloner
 
-MasCloner is a production-ready admin UI + API system for managing automated one-way synchronization from Google Drive to Nextcloud using rclone, with comprehensive monitoring, file tree visualization, and secure Cloudflare Tunnel access.
+**Production-ready automated sync system: Google Drive → Nextcloud**
 
-## Features
+A comprehensive web-based administration system for managing one-way synchronization from Google Drive to Nextcloud using rclone, featuring real-time monitoring, file tree visualization, guided setup, and secure remote access.
 
-- **One-way sync**: Google Drive → Nextcloud (new and modified files only)
-- **Automated scheduling**: 1-5 minute intervals with intelligent jitter
-- **Enhanced Web UI**: Streamlit-based dashboard with file tree visualization
-- **Complete REST API**: Full API for all operations with comprehensive endpoints
-- **Conflict resolution**: Automatic renaming with `-conflict(n)` suffix
-- **File tree monitoring**: Real-time hierarchical file status visualization
-- **Guided setup**: Interactive setup wizard for easy configuration
-- **Secure access**: Cloudflare Tunnel + Zero Trust authentication
-- **Production ready**: Hardened SystemD services with comprehensive operational scripts
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
 
-## Technology Stack
+---
 
-- **Backend**: FastAPI + Uvicorn, APScheduler for intelligent scheduling
-- **Database**: SQLAlchemy 2.0+ + SQLite for state/logs storage  
-- **UI**: Enhanced Streamlit web interface with tree visualization
-- **Sync Engine**: rclone subprocess with comprehensive JSON logging
-- **Security**: Fernet encryption, hardened systemd services, Cloudflare Zero Trust
-- **Tunnel**: Cloudflare Tunnel for secure external access
-- **Deployment**: Production-ready Debian/Ubuntu with automated installation
+## ✨ Features
 
-## Quick Start (Development)
+### Core Functionality
+- 🔄 **One-way Sync**: Google Drive → Nextcloud (incremental, new/modified files only)
+- ⏱️ **Automated Scheduling**: Configurable intervals (1-5 minutes) with intelligent jitter
+- 🌳 **File Tree Visualization**: Hierarchical display with real-time sync status per file/folder
+- 🧙‍♂️ **Guided Setup Wizard**: Step-by-step configuration with validation and testing
+- 📊 **Real-time Monitoring**: Live dashboard with statistics, history, and event logging
+- 🔒 **Conflict Resolution**: Automatic file renaming with `-conflict(n)` suffix
+- 🌐 **Secure Remote Access**: Cloudflare Tunnel + Zero Trust authentication
+
+### Technical Capabilities
+- 📡 **RESTful API**: Complete FastAPI backend with OpenAPI documentation
+- 💾 **Persistent Storage**: SQLite database for configuration, run history, and events
+- 📈 **Performance Tuning**: Configurable parallelism, bandwidth limits, and transfer optimization
+- 🔐 **Security**: Fernet encryption, hardened systemd services, least-privilege user model
+- 🚀 **Production Ready**: One-command installation, automated updates, comprehensive monitoring
+- 📝 **Comprehensive Logging**: JSON-structured logs with rotation and archival
+
+### Google Drive Access
+- ✅ **Full Access**: My Drive, Shared with me, Shared Drives/Team Drives
+- 🔓 **No Restrictions**: Access all folder types by default
+- 🔐 **Read-Only Scope**: Uses `drive.readonly` OAuth scope for security
+- 📂 **Natural Paths**: Simple folder names, no complex path syntax required
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- rclone installed
-- Git
+- **Python**: 3.11 or higher
+- **rclone**: 1.60 or higher ([Install rclone](https://rclone.org/install/))
+- **Git**: Any version
+- **OS**: Linux (Debian/Ubuntu recommended for production)
 
-### Setup
+### Development Setup (5 minutes)
 
-1. **Clone repository**:
-   ```bash
-   git clone https://github.com/ali-raaed31/mascloner.git
-   cd mascloner
-   ```
+```bash
+# 1. Clone repository
+git clone https://github.com/ali-raaed31/mascloner.git
+cd mascloner
 
-2. **Create virtual environment**:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # Linux/Mac
-   # .venv\Scripts\activate  # Windows
-   ```
+# 2. Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# 3. Install dependencies
+pip install -r requirements.txt
 
-4. **Setup development environment**:
-   ```bash
-   python setup_dev_env.py
-   ```
+# 4. Initialize development environment
+python setup_dev_env.py
+# ✅ Creates .env with Fernet encryption key
+# ✅ Creates etc/rclone.conf
+# ✅ Creates data/ and logs/ directories
 
-5. **Start API server**:
-   ```bash
-   python -m app.api.main
-   ```
+# 5. Start API server (Terminal 1)
+python -m app.api.main
+# → http://localhost:8787 (API)
+# → http://localhost:8787/docs (Swagger UI)
 
-6. **Start UI (in another terminal)**:
-   ```bash
-   streamlit run app/ui/Home.py
-   ```
+# 6. Start UI (Terminal 2)
+streamlit run app/ui/Home.py
+# → http://localhost:8501 (Web Dashboard)
+```
 
-7. **Access the application**:
-   - **UI**: http://localhost:8501
-   - **API**: http://localhost:8787
-   - **API docs**: http://localhost:8787/docs
-   - **Tree view**: Navigate to "File Tree" page for enhanced visualization
+**🎉 You're ready!** Open http://localhost:8501 and follow the Setup Wizard.
 
-### Development Features
+---
 
-- 🧪 **Test database and rclone**: `python test_db.py` and `python test_rclone.py`
-- 📊 **Interactive setup**: Use the Setup Wizard page for guided configuration
-- 🌳 **File tree**: Enhanced tree view with real-time sync status indicators
-- 🔄 **Live reload**: Both API and UI support development reload
+## 📦 Production Deployment
 
-## Production Deployment
+### One-Command Installation
 
-### System Requirements
-
-- **OS**: Debian 12+ or Ubuntu 22.04 LTS (recommended)
-- **Memory**: 2GB RAM minimum, 4GB recommended
-- **Storage**: 20GB minimum, 50GB+ recommended
-- **Network**: Internet connectivity for Google Drive, Nextcloud, and Cloudflare
-- **Access**: Root/sudo access for installation
-
-### Automated Installation
-
-**🚀 One-command installation:**
-
-   ```bash
-# Clone and install
+```bash
 git clone https://github.com/ali-raaed31/mascloner.git
 cd mascloner
 sudo bash ops/scripts/install.sh
 ```
 
-**The installer automatically handles:**
-- ✅ System dependencies (Python, rclone, cloudflared via official Cloudflare repo)
-- ✅ Dedicated `mascloner` user creation and `/srv/mascloner` setup
-- ✅ Virtual environment and dependencies
-- ✅ SystemD services installation and configuration
-- ✅ Database initialization with encryption
-- ✅ Firewall configuration and security hardening
-- ✅ Log rotation setup
+**What the installer does:**
+- ✅ Installs system dependencies (Python 3.11+, rclone, cloudflared)
+- ✅ Creates dedicated `mascloner` system user
+- ✅ Sets up `/srv/mascloner` directory
+- ✅ Installs Python dependencies in virtual environment
+- ✅ Initializes database with encryption
+- ✅ Installs and starts systemd services
+- ✅ Configures firewall and log rotation
 
-### Initial Configuration
+### Post-Installation Configuration
 
-**After installation, follow the guided setup:**
+#### 1. Configure Google Drive
 
-1. **📁 Configure Google Drive** (CLI-guided):
-   ```bash
-   # Use Setup Wizard in UI for guided CLI commands
-   # Or configure manually:
-   rclone config create gdrive drive
-   # Follow OAuth flow in browser
-   rclone lsd gdrive:  # Test connection
-   ```
+```bash
+# Via Setup Wizard UI or manually:
+sudo -u mascloner rclone config create gdrive drive \
+  --drive-scope drive.readonly
 
-2. **☁️ Configure Nextcloud** (via UI):
-   - Access: http://localhost:8501 (temporary)
-   - Navigate to **Setup Wizard**
-   - Enter WebDAV URL, username, app password
-   - Test connection and save
-
-3. **🌐 Setup Cloudflare Tunnel** (optional but recommended):
-   ```bash
-   sudo bash ops/scripts/setup-cloudflare-tunnel.sh
-   ```
-
-4. **📂 Select Folders**:
-   - Use the Setup Wizard to browse and select:
-     - Google Drive source folder
-     - Nextcloud destination folder  
-   - Preview sync configuration
-
-5. **⚙️ Configure Performance**:
-   - Set sync interval (1-5 minutes)
-   - Choose performance settings
-   - Complete setup and start syncing
-
-### Secure Access Options
-
-**Option 1: Cloudflare Tunnel (Recommended)**
-- ✅ No exposed ports
-- ✅ Zero Trust authentication  
-- ✅ Global DDoS protection
-- ✅ Encrypted tunnels
-
-**Option 2: Direct Local Access**
-- ⚠️ Local network only: http://localhost:8501
-- ⚠️ SSH tunnel for remote access
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MASCLONER_BASE_DIR` | Base installation directory | `/srv/mascloner` |
-| `MASCLONER_DB_PATH` | SQLite database path | `{base}/data/mascloner.db` |
-| `MASCLONER_RCLONE_CONF` | rclone config file | `{base}/etc/rclone.conf` |
-| `MASCLONER_LOG_DIR` | Log directory | `{base}/logs` |
-| `MASCLONER_FERNET_KEY` | Encryption key | *Required* |
-| `API_HOST` | API bind address | `127.0.0.1` |
-| `API_PORT` | API port | `8787` |
-| `UI_HOST` | UI bind address | `127.0.0.1` |
-| `UI_PORT` | UI port | `8501` |
-| `SYNC_INTERVAL_MIN` | Default sync interval | `5` |
-| `RCLONE_TRANSFERS` | Parallel transfers | `4` |
-| `RCLONE_CHECKERS` | File checkers | `8` |
-
-### Sync Configuration
-
-Configure via web UI or API:
-
-- **Google Drive Remote**: Name of rclone remote for Google Drive
-- **Google Drive Source**: Path in Google Drive (e.g., "Shared drives/Team/Folder")
-- **Nextcloud Remote**: Name of rclone remote for Nextcloud
-- **Nextcloud Destination**: Path in Nextcloud (e.g., "Backups/GoogleDrive")
-
-## API Reference
-
-### Core Endpoints
-
-- `GET /health` - Health check
-- `GET /status` - System status and last run info
-- `GET /runs` - List recent sync runs
-- `GET /runs/{id}/events` - Get file events for a run
-- `POST /runs` - Trigger manual sync
-- `GET /events` - Get all file events across runs
-
-### Enhanced Features
-
-- `GET /tree` - Get hierarchical file tree with sync status
-- `GET /tree/status/{path}` - Get sync status for specific path
-- `GET /browse/folders/{remote}` - Browse folders in rclone remote
-- `GET /estimate/size` - Estimate sync operation size
-
-### Configuration & Testing
-
-- `GET /config` - Get sync configuration
-- `POST /config` - Update sync configuration
-- `POST /test/gdrive` - Test Google Drive connection
-- `POST /test/nextcloud` - Test Nextcloud connection
-- `POST /test/nextcloud/webdav` - Test and create WebDAV remote
-
-### Scheduling
-
-- `GET /schedule` - Get sync schedule
-- `POST /schedule` - Update sync schedule
-- `POST /schedule/start` - Start scheduler
-- `POST /schedule/stop` - Stop scheduler
-
-### Maintenance
-
-- `POST /maintenance/cleanup` - Clean up old run records
-- `GET /database/info` - Database statistics and health
-
-**📚 Full API documentation with interactive testing available at `/docs` when running.**
-
-## Directory Structure
-
-```
-/srv/mascloner/
-├── .env                    # Environment configuration
-├── requirements.txt        # Python dependencies
-├── README.md
-├── app/
-│   ├── api/               # FastAPI backend
-│   │   ├── main.py        # API routes and app
-│   │   ├── models.py      # Database models
-│   │   ├── db.py          # Database setup
-│   │   ├── config.py      # Configuration management
-│   │   ├── scheduler.py   # APScheduler integration
-│   │   ├── tree_builder.py # File tree visualization
-│   │   └── rclone_runner.py # rclone execution
-│   └── ui/                # Streamlit frontend
-│       ├── Home.py
-│       └── pages/         # UI pages
-├── ops/                   # Deployment scripts
-│   ├── systemd/          # Service files
-│   ├── logrotate/        # Log rotation
-│   └── scripts/          # Installation scripts
-├── data/                 # SQLite database
-├── etc/                  # Configuration files
-└── logs/                 # Application logs
+# Test connection
+sudo -u mascloner rclone lsd gdrive:
 ```
 
-## Operations
+#### 2. Configure Nextcloud
+
+Access UI at http://localhost:8501:
+1. Navigate to **Setup Wizard** → **Nextcloud** tab
+2. Enter WebDAV URL, username, app password
+3. Click **Test Connection** → **Save**
+
+#### 3. Select Sync Folders
+
+1. Navigate to **Setup Wizard** → **Sync Paths** tab
+2. Browse and select source/destination folders
+3. Click **Save Sync Paths**
+
+#### 4. Configure Schedule
+
+1. Navigate to **Settings** page
+2. Set sync interval and performance options
+3. Click **Save Configuration**
+
+#### 5. Setup Cloudflare Tunnel (Optional)
+
+```bash
+sudo bash ops/scripts/setup-cloudflare-tunnel.sh
+```
+
+---
+
+## �� Usage
+
+### Web Dashboard
+
+- **Home**: System status, last sync, quick actions, recent activity
+- **Settings**: Configuration management, performance tuning
+- **Runs & Events**: Sync history, file events, log access
+- **Setup Wizard**: Guided configuration for first-time users
+- **File Tree**: Hierarchical file visualization with sync status
+
+### API Endpoints
+
+**Base URL**: `http://localhost:8787`
+
+```bash
+# Health check
+GET /health
+
+# System status
+GET /status
+
+# Trigger sync
+POST /runs
+
+# List runs
+GET /runs?limit=10
+
+# Get file tree
+GET /tree
+
+# Browse folders
+GET /browse/folders/{remote}?path=
+
+# Configuration
+GET /config
+POST /config
+
+# Scheduling
+GET /schedule
+POST /schedule
+POST /schedule/start
+POST /schedule/stop
+```
+
+**Interactive docs**: http://localhost:8787/docs
+
+---
+
+## 🛠️ Operations
 
 ### Service Management
 
 ```bash
-# Check all services (API, UI, Tunnel)
-sudo systemctl status mascloner-api mascloner-ui mascloner-tunnel
-
-# View real-time logs
-journalctl -f -u mascloner-api
-journalctl -f -u mascloner-ui  
-journalctl -f -u mascloner-tunnel
+# Check status
+sudo systemctl status mascloner-api mascloner-ui
 
 # Restart services
 sudo systemctl restart mascloner-api mascloner-ui
-sudo systemctl restart mascloner-tunnel  # If using Cloudflare
+
+# View logs
+journalctl -f -u mascloner-api
+journalctl -f -u mascloner-ui
 ```
 
 ### Health Monitoring
@@ -277,165 +209,183 @@ sudo systemctl restart mascloner-tunnel  # If using Cloudflare
 # Comprehensive health check
 sudo bash /srv/mascloner/ops/scripts/health-check.sh
 
-# Quick API health check
+# API health
 curl http://localhost:8787/health
 
-# Database status
+# Database info
 curl http://localhost:8787/database/info
 ```
 
 ### Backup & Restore
 
 ```bash
-# Automated backup (includes database, config, logs)
+# Automated backup
 sudo bash /srv/mascloner/ops/scripts/backup.sh
 
-# Manual backup
-sudo cp /srv/mascloner/data/mascloner.db /backup/
-sudo cp -r /srv/mascloner/etc/ /backup/
-
-# View backups
+# Backups stored in
 ls -la /var/backups/mascloner/
 ```
 
 ### Updates
 
 ```bash
-# Safe automated update
+# Automated update
 sudo bash /srv/mascloner/ops/scripts/update.sh
-
-# Manual update process
-sudo systemctl stop mascloner-api mascloner-ui
-cd /srv/mascloner && sudo git pull
-sudo systemctl start mascloner-api mascloner-ui
 ```
 
-### Monitoring
+---
 
-- 🏥 **Health checks**: Run health-check.sh for comprehensive status
-- 📊 **Web dashboard**: Real-time status and file tree visualization
-- 📡 **API monitoring**: `/health` and `/status` endpoints
-- 📂 **File tree**: Monitor sync status per file/folder
-- 📈 **Analytics**: Performance metrics and sync statistics
+## 🔐 Security
 
-## Security
+### Features
 
-### Multi-Layer Security Architecture
+- **🔐 Encryption**: Fernet encryption for all sensitive data
+- **👤 User Isolation**: Dedicated `mascloner` system user
+- **🔒 File Permissions**: Secure permissions (0600 for secrets)
+- **🌐 Cloudflare Tunnel**: Zero exposed ports, Zero Trust auth
+- **🛡️ Systemd Hardening**: Comprehensive security restrictions
+- **🔥 Firewall**: UFW configured to block direct access
 
-- **🔐 Encryption**: All sensitive data encrypted with Fernet (passwords, tokens)
-- **👤 User Isolation**: Runs as dedicated `mascloner` user with restricted privileges  
-- **🔒 File Permissions**: Secure permissions (0600 for secrets, 0700 for config directories)
-- **🌐 Network Security**: Cloudflare Tunnel eliminates port exposure
-- **🛡️ Zero Trust**: Multi-factor authentication with geographic restrictions
-- **🔥 Firewall**: UFW configured to block direct access to application ports
-- **⚙️ Systemd Hardening**: Comprehensive security restrictions in service files
+### Recommended Setup
 
-### Recommended Security Setup
+1. **Cloudflare Tunnel** for secure remote access (no exposed ports)
+2. **Zero Trust Policies** (email domain, IP, country restrictions)
+3. **App Passwords** for Nextcloud (not main password)
+4. **OAuth Read-Only** for Google Drive (`drive.readonly` scope)
+5. **Regular Backups** to secure location
 
-1. **Cloudflare Tunnel** (eliminates attack surface):
-   - No exposed ports (8787, 8501 blocked by firewall)
-   - Encrypted tunnels with DDoS protection
-   - Geographic access controls
+---
 
-2. **Zero Trust Policies**:
-   - Email-based authentication
-   - IP address restrictions  
-   - Country-based filtering
-   - Device compliance checking
-
-3. **Access Controls**:
-   - App passwords for Nextcloud (not main password)
-   - OAuth for Google Drive (read-only scope)
-   - Encrypted credential storage
-
-**📋 Security checklist available in SECURITY.md**
-
-## User Interface Features
-
-### Enhanced Web Dashboard
-
-- **🏠 Dashboard**: Real-time system status, recent activity, quick controls
-- **📊 Analytics**: Comprehensive sync statistics with charts and metrics  
-- **⚙️ Settings**: Complete configuration management with validation
-- **📅 Scheduling**: Intelligent sync scheduling with performance tuning
-- **📋 Run History**: Detailed sync run history with filtering and search
-- **🌳 File Tree**: Hierarchical file visualization with sync status indicators
-
-### File Tree Visualization
-
-- **📁 Hierarchical Display**: Navigate through folder structure with collapsible tree
-- **🔍 Real-time Status**: Visual indicators for each file/folder sync state:
-  - ✅ **Synced**: Successfully transferred files
-  - ⏳ **Pending**: Files waiting to be synced  
-  - ❌ **Error**: Failed sync operations
-  - ⚠️ **Conflict**: File conflicts detected
-  - ❓ **Unknown**: Status not determined
-- **🔎 Advanced Filtering**: Filter by status, size, file type, date
-- **📊 Metadata Display**: File sizes, sync timestamps, error details
-- **🔄 Live Updates**: Auto-refresh with real-time status changes
-
-### Setup Wizard
-
-- **🧙‍♂️ Guided Configuration**: Step-by-step setup for first-time users
-- **📁 Google Drive Setup**: CLI-guided OAuth with connection validation
-- **☁️ Nextcloud Setup**: UI-based WebDAV configuration with real-time testing
-- **📂 Folder Selection**: Browse and select actual folders after authentication
-- **⚙️ Performance Tuning**: Intelligent recommendations based on usage patterns
-- **✅ Validation**: Comprehensive testing and preview before going live
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **rclone authentication errors**:
-   - Reconfigure remotes: `sudo -u mascloner rclone config`
-   - Check Google Drive scope: `drive.readonly`
-   - Verify Nextcloud app password
-
-2. **Sync not running**:
-   - Check scheduler status in web UI
-   - Verify configuration in Settings
-   - Check API logs: `journalctl -u mascloner-api`
-
-3. **Permission errors**:
-   - Ensure files owned by `mascloner` user
-   - Check file permissions (especially `etc/` directory)
-
-4. **Database issues**:
-   - Check disk space
-   - Verify database permissions
-   - Use `/database/info` endpoint for diagnostics
-
-### Log Files
-
-- **API logs**: `journalctl -u mascloner-api`
-- **UI logs**: `journalctl -u mascloner-ui`  
-- **Sync logs**: `/srv/mascloner/logs/sync-YYYY-MM-DD.log`
-- **rclone logs**: Individual sync log files
-
-## Development
-
-### Running Tests
-
+**API Service Won't Start**
 ```bash
-# Database and config tests
-python test_db.py
-
-# rclone runner tests  
-python test_rclone.py
+journalctl -u mascloner-api -n 50
+sudo systemctl restart mascloner-api
 ```
 
-### Code Style
+**rclone Authentication Errors**
+```bash
+sudo -u mascloner rclone config reconnect gdrive
+sudo -u mascloner rclone lsd gdrive:
+```
 
-- Follow PEP 8
-- Use type hints
-- Add docstrings to public functions
-- Use meaningful variable names
+**Sync Not Running**
+```bash
+# Check scheduler status
+curl http://localhost:8787/schedule
 
-## License
+# Start scheduler
+curl -X POST http://localhost:8787/schedule/start
 
-[Add your license here]
+# Trigger manual sync
+curl -X POST http://localhost:8787/runs
+```
 
-## Support
+**Permission Errors**
+```bash
+sudo chown -R mascloner:mascloner /srv/mascloner
+sudo chmod 600 /srv/mascloner/.env
+sudo chmod 600 /srv/mascloner/etc/rclone.conf
+```
 
-[Add support information here]
+### Diagnostic Commands
+
+```bash
+# Health check
+sudo bash /srv/mascloner/ops/scripts/health-check.sh
+
+# View logs
+journalctl -u mascloner-api --since "1 hour ago"
+tail -f /srv/mascloner/logs/sync-*.log
+
+# Database statistics
+sqlite3 /srv/mascloner/data/mascloner.db "SELECT COUNT(*) FROM runs;"
+```
+
+---
+
+## 📁 Directory Structure
+
+```
+/srv/mascloner/                      # Production base
+├── .env                             # Environment variables (secrets)
+├── requirements.txt                 # Python dependencies
+├── app/
+│   ├── api/                         # FastAPI backend
+│   │   ├── main.py                  # API entrypoint
+│   │   ├── config.py                # Configuration
+│   │   ├── db.py                    # Database
+│   │   ├── models.py                # ORM models
+│   │   ├── schemas.py               # Pydantic schemas
+│   │   ├── scheduler.py             # Job scheduling
+│   │   ├── rclone_runner.py         # rclone execution
+│   │   ├── tree_builder.py          # File tree
+│   │   └── routers/                 # API routes
+│   └── ui/                          # Streamlit frontend
+│       ├── Home.py                  # Dashboard
+│       ├── api_client.py            # HTTP client
+│       ├── pages/                   # UI pages
+│       └── components/              # UI components
+├── ops/                             # Operations
+│   ├── cli/                         # CLI tool
+│   ├── scripts/                     # Bash automation
+│   ├── systemd/                     # Service units
+│   └── logrotate/                   # Log rotation
+├── data/                            # Runtime data
+│   └── mascloner.db                 # SQLite database
+├── etc/                             # Configuration
+│   └── rclone.conf                  # rclone remotes
+└── logs/                            # Application logs
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Follow code style (PEP 8, type hints, docstrings)
+4. Add tests for new features
+5. Submit pull request with clear description
+
+```bash
+# Development setup
+git clone https://github.com/YOUR-USERNAME/mascloner.git
+cd mascloner
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python setup_dev_env.py
+```
+
+---
+
+## 📄 License
+
+MIT License - See [LICENSE](LICENSE) file for details.
+
+---
+
+## 📞 Support
+
+- **API Docs**: http://localhost:8787/docs
+- **GitHub Issues**: [Report bugs or request features](https://github.com/ali-raaed31/mascloner/issues)
+- **Discussions**: [Ask questions or share ideas](https://github.com/ali-raaed31/mascloner/discussions)
+
+---
+
+## 🙏 Acknowledgments
+
+- **[rclone](https://rclone.org/)** - File synchronization
+- **[FastAPI](https://fastapi.tiangolo.com/)** - Web framework
+- **[Streamlit](https://streamlit.io/)** - UI development
+- **[Cloudflare](https://www.cloudflare.com/)** - Secure tunneling
+
+---
+
+**⭐ Star this repository if you find it useful!**
