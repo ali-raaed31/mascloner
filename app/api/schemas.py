@@ -12,6 +12,10 @@ class ConfigRequest(BaseModel):
 
     gdrive_remote: str = Field(..., description="Google Drive remote name")
     gdrive_src: str = Field(..., description="Google Drive source path")
+    gdrive_shared_with_me: Optional[bool] = Field(
+        default=False, 
+        description="Restrict to 'Shared with me' folder only (default: False = access both My Drive and Shared)"
+    )
     nc_remote: str = Field(..., description="Nextcloud remote name")
     nc_dest_path: str = Field(..., description="Nextcloud destination path")
 

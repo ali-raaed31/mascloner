@@ -215,7 +215,8 @@ def sync_job() -> None:
             gdrive_src=sync_config["gdrive_src"],
             nc_remote=sync_config["nc_remote"],
             nc_dest_path=sync_config["nc_dest_path"],
-            dry_run=False
+            dry_run=False,
+            shared_with_me=sync_config.get("gdrive_shared_with_me", "false").lower() == "true"
         )
         
         # Update run with results

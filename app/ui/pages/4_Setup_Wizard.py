@@ -131,7 +131,8 @@ def render_summary_panel():
         f"({'✅' if remotes.get('gdrive') else '❌'})"
     )
     st.sidebar.markdown(
-        f"- **Google Drive path**: `{config.get('gdrive_src', 'Not set')}`"
+        f"- **Google Drive path**: `{config.get('gdrive_src', 'Not set')}`",
+        f"- **Drive mode**: {'🔒 Shared with me only' if config.get('gdrive_shared_with_me', 'false').lower() == 'true' else '📂 My Drive + Shared'}",
     )
     st.sidebar.markdown(
         f"- **Nextcloud remote**: `{config.get('nc_remote', 'ncwebdav')}` "
@@ -270,6 +271,18 @@ def render_paths_tab():
             state_prefix="gdrive",
             initial_path=config.get("gdrive_src", ""),
         )
+        
+        # Add option to restrict to "Shared with me" folder
+        st.markdown("---")
+        shared_with_me = st.checkbox(
+            "🔒 Restrict to 'Shared with me' folder only",
+            value=config.get("gdrive_shared_with_me", "false").lower() == "true",
+            help="Enable this if your source folder is in 'Shared with me'. Leave unchecked to access both 'My Drive' and 'Shared with me'."
+        )
+        if shared_with_me:
+            st.info("ℹ️ Sync will only access folders in 'Shared with me', not 'My Drive'")
+        else:
+            st.info("ℹ️ Sync will access both 'My Drive' and 'Shared with me' folders")
 
     with tab_dest:
         selected_dest = render_path_editor(
@@ -292,6 +305,7 @@ def render_paths_tab():
         payload = {
             "gdrive_remote": gdrive_remote_name,
             "gdrive_src": selected_source,
+            "gdrive_shared_with_me": "true" if shared_with_me else "false",
             "nc_remote": nextcloud_remote_name,
             "nc_dest_path": selected_dest,
         }
