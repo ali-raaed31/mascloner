@@ -226,7 +226,9 @@ class RcloneRunner:
         nc_dest_path = nc_dest_path.strip() if nc_dest_path else ""
         
         # Build source and destination paths
-        src = f"{gdrive_remote}:{gdrive_src}"
+        # For Google Drive, ensure path doesn't have leading slash (rclone expects relative paths)
+        gdrive_src_clean = gdrive_src.lstrip("/")
+        src = f"{gdrive_remote}:{gdrive_src_clean}"
         dest = f"{nc_remote}:{nc_dest_path.rstrip('/')}/"
         
         logger.info(f"Starting sync: {src} -> {dest}")
@@ -264,7 +266,14 @@ class RcloneRunner:
         try:
             # Log the exact command for debugging
             logger.info(f"Command list has {len(cmd)} elements")
-            logger.debug(f"Command elements: {[repr(arg) for arg in cmd[:6]]}")  # First 6 elements with repr() to show quotes
+            logger.info(f"Command elements [0-5]: {[repr(arg) for arg in cmd[:6]]}")  # First 6 elements with repr() to show quotes
+            
+            # Test: Try executing rclone with shell=False (explicit) to verify behavior
+            # Also capture the working directory
+            import os
+            logger.info(f"Current working directory: {os.getcwd()}")
+            logger.info(f"PATH: {os.environ.get('PATH', 'NOT SET')}")
+            logger.info(f"USER: {os.environ.get('USER', 'NOT SET')}")
             
             # Start rclone process
             process = subprocess.Popen(
@@ -273,7 +282,10 @@ class RcloneRunner:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                shell=False,  # Explicitly set to False for clarity
+                cwd=None,  # Use current directory
+                env=None   # Inherit environment
             )
             
             # Wait for process completion first
