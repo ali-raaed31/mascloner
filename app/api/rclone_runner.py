@@ -171,8 +171,7 @@ class RcloneRunner:
         src: str,
         dest: str,
         log_file: str,
-        additional_flags: List[str] = None,
-        shared_with_me: bool = False
+        additional_flags: List[str] = None
     ) -> List[str]:
         """Build rclone command with standard flags for MasCloner."""
         
@@ -196,12 +195,6 @@ class RcloneRunner:
             f"--drive-export-formats={self.rclone_config['drive_export']}",
         ]
         
-        # Conditionally add --drive-shared-with-me if needed
-        # NOTE: This flag restricts access to "Shared with me" folder only
-        # Without it, rclone can access both "My Drive" and "Shared with me"
-        if shared_with_me:
-            base_cmd.append("--drive-shared-with-me")
-        
         if additional_flags:
             base_cmd.extend(additional_flags)
         
@@ -213,8 +206,7 @@ class RcloneRunner:
         gdrive_src: str,
         nc_remote: str,
         nc_dest_path: str,
-        dry_run: bool = False,
-        shared_with_me: bool = False
+        dry_run: bool = False
     ) -> SyncResult:
         """Execute sync operation and return results."""
         
@@ -238,12 +230,12 @@ class RcloneRunner:
         src = f"{gdrive_remote}:{gdrive_src_clean}"
         dest = f"{nc_remote}:{nc_dest_path.rstrip('/')}/"
         
-        logger.info(f"Starting sync: {src} -> {dest} (shared_with_me={shared_with_me})")
+        logger.info(f"Starting sync: {src} -> {dest}")
         logger.debug(f"Path details - gdrive_src: '{gdrive_src}' (len={len(gdrive_src)}), nc_dest_path: '{nc_dest_path}' (len={len(nc_dest_path)})")
         
         try:
             # Build command
-            cmd = self.build_rclone_command(src, dest, str(log_file), shared_with_me=shared_with_me)
+            cmd = self.build_rclone_command(src, dest, str(log_file))
             
             if dry_run:
                 cmd.append("--dry-run")

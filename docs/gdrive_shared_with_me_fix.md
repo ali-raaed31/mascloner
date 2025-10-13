@@ -35,8 +35,11 @@ The Python code automatically added `--drive-shared-with-me` to every sync comma
 - `app/api/scheduler.py` - Pass config value to `run_sync()`
 
 **Default Behavior:**
-- `gdrive_shared_with_me = false` (default) → Access both "My Drive" AND "Shared with me"
-- `gdrive_shared_with_me = true` → Restrict to "Shared with me" only
+- `gdrive_shared_with_me = false` (default) → Access ALL folder types:
+  - My Drive (personal folders) ✅
+  - Shared with me (folders shared by others) ✅
+  - Shared Drives / Team Drives ✅
+- `gdrive_shared_with_me = true` → Restrict to "Shared with me" only (special case)
 
 ### 2. Added UI Control (Frontend)
 
@@ -57,7 +60,10 @@ The Python code automatically added `--drive-shared-with-me` to every sync comma
 3. Select your source folder
 4. Save
 
-✅ Sync will work for both "My Drive" and "Shared with me" folders
+✅ Sync will work for ALL folder types:
+- My Drive folders (your personal folders)
+- Shared with me folders (folders others shared with you)
+- Shared Drives / Team Drives (if you have access)
 
 ### For "Shared with me" Folders Only (Special Case)
 
