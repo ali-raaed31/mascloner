@@ -13,8 +13,7 @@ def test_rclone_command():
         "ncwebdav:Cloner_files/from google drive/",
         "--config=/srv/mascloner/etc/rclone.conf",
         "--dry-run",
-        "--log-level=INFO",
-        "-vv"
+        "--log-level=INFO"
     ]
     
     print("=" * 80)
