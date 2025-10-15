@@ -286,7 +286,6 @@ class RcloneRunner:
             
             # Test: Try executing rclone with shell=False (explicit) to verify behavior
             # Also capture the working directory
-            import os
             logger.info(f"Current working directory: {os.getcwd()}")
             logger.info(f"PATH: {os.environ.get('PATH', 'NOT SET')}")
             logger.info(f"USER: {os.environ.get('USER', 'NOT SET')}")
