@@ -235,6 +235,50 @@ sudo bash /srv/mascloner/ops/scripts/update.sh
 
 ---
 
+## ⚙️ Performance Tuning (Long Runs)
+
+For large syncs (e.g., 96+ GB, many files), you can safely tune rclone and MasCloner behavior using environment variables:
+
+- RCLONE_TRANSFERS: number of concurrent file transfers (default 4). Increase cautiously if CPU/network allows.
+- RCLONE_CHECKERS: parallel checkers for listing/comparison (default 8). Lower if Drive/WebDAV rate-limits.
+- RCLONE_TPSLIMIT: cap API calls per second across HTTP backends (default 10). Keep ≤10 for Google’s default client quota or set your own client_id.
+- RCLONE_BWLIMIT: bandwidth cap, e.g. 10M or 0 for unlimited.
+- RCLONE_LOG_LEVEL: default NOTICE to reduce noise. Options: DEBUG|INFO|NOTICE|ERROR.
+- RCLONE_STATS_INTERVAL: frequency of stats lines (default 60s). Increase to reduce log volume during long runs.
+- RCLONE_BUFFER_SIZE: per-transfer buffer (default 16Mi). Larger may help on fast disks/network but increases RAM.
+- RCLONE_DRIVE_CHUNK_SIZE: Drive upload chunk, power of 2 ≥256k (e.g., 16Mi, 32Mi). Improves throughput but uses RAM per transfer.
+- RCLONE_DRIVE_UPLOAD_CUTOFF: size above which to chunk (default 8Mi). Leave default unless you know why to change.
+- RCLONE_RETRIES / RCLONE_RETRIES_SLEEP / RCLONE_LOW_LEVEL_RETRIES / RCLONE_TIMEOUT: resiliency for long operations.
+- RCLONE_FAST_LIST: set to 1 to enable fast-list. Useful if listing fits memory; avoid on very large trees to prevent RAM spikes.
+- MASCLONER_LIGHTWEIGHT_EVENTS: set to 1 to skip per-file event persistence and rely on aggregate stats only. Cuts DB writes significantly.
+
+Recommended starting profile for stability:
+
+- RCLONE_TRANSFERS=4
+- RCLONE_CHECKERS=6
+- RCLONE_TPSLIMIT=8
+- RCLONE_STATS_INTERVAL=60s
+- RCLONE_LOG_LEVEL=NOTICE
+- MASCLONER_LIGHTWEIGHT_EVENTS=1
+
+Throughput profile (monitor for rate limits/RAM):
+
+- RCLONE_TRANSFERS=6
+- RCLONE_CHECKERS=8
+- RCLONE_TPSLIMIT=10
+- RCLONE_BUFFER_SIZE=32Mi
+- RCLONE_DRIVE_CHUNK_SIZE=32Mi
+- RCLONE_STATS_INTERVAL=90s
+
+Notes:
+
+- Drive rate-limits API calls. Many small files will be limited to ~2 files/sec overall by Google. Larger files can transfer at high throughput.
+- Using your own Drive client_id increases quota and reduces global throttling. See rclone docs for drive client_id setup.
+- We skip Google Drive shortcuts by default to avoid error-prone shortcut objects.
+- Avoid --fast-list on extremely large trees unless memory headroom is ample; enable via RCLONE_FAST_LIST=1 if listings are a bottleneck and memory permits.
+
+---
+
 ## 🔐 Security
 
 ### Features

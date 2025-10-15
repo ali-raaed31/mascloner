@@ -97,7 +97,19 @@ class ConfigManager:
             "tpslimit": int(os.getenv("RCLONE_TPSLIMIT", 10)),
             "bwlimit": os.getenv("RCLONE_BWLIMIT", "0"),
             "drive_export": os.getenv("RCLONE_DRIVE_EXPORT", "docx,xlsx,pptx"),
-            "log_level": os.getenv("RCLONE_LOG_LEVEL", "INFO"),
+            # Use NOTICE by default to reduce per-file INFO logs; stats are still emitted at NOTICE
+            "log_level": os.getenv("RCLONE_LOG_LEVEL", "NOTICE"),
+            # Tuning and resiliency
+            "stats_interval": os.getenv("RCLONE_STATS_INTERVAL", "60s"),
+            "buffer_size": os.getenv("RCLONE_BUFFER_SIZE", "16Mi"),
+            "drive_chunk_size": os.getenv("RCLONE_DRIVE_CHUNK_SIZE", ""),
+            "drive_upload_cutoff": os.getenv("RCLONE_DRIVE_UPLOAD_CUTOFF", ""),
+            "retries": int(os.getenv("RCLONE_RETRIES", 5)),
+            "retries_sleep": os.getenv("RCLONE_RETRIES_SLEEP", "10s"),
+            "low_level_retries": int(os.getenv("RCLONE_LOW_LEVEL_RETRIES", 10)),
+            "timeout": os.getenv("RCLONE_TIMEOUT", "5m"),
+            # Disabled by default due to potential Drive listing caveats; enable explicitly if desired
+            "fast_list": os.getenv("RCLONE_FAST_LIST", "0").lower() in ("1", "true", "yes", "on"),
         }
     
     def get_sync_config(self) -> Dict[str, Any]:

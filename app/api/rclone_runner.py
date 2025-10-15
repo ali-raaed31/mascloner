@@ -184,17 +184,30 @@ class RcloneRunner:
             "--use-json-log",
             f"--log-level={self.rclone_config['log_level']}",
             "--stats-log-level=NOTICE",  # Ensure stats are included in JSON logs
-            "--stats=30s",
+            f"--stats={self.rclone_config.get('stats_interval', '60s')}",
             "--stats-one-line",
             # Removed --fast-list as it can cause issues with some Google Drive folders
             f"--checkers={self.rclone_config['checkers']}",
             f"--transfers={self.rclone_config['transfers']}",
             f"--tpslimit={self.rclone_config['tpslimit']}",
             f"--bwlimit={self.rclone_config['bwlimit']}",
+            f"--buffer-size={self.rclone_config.get('buffer_size', '16Mi')}",
+            f"--retries={self.rclone_config.get('retries', 5)}",
+            f"--retries-sleep={self.rclone_config.get('retries_sleep', '10s')}",
+            f"--low-level-retries={self.rclone_config.get('low_level_retries', 10)}",
+            f"--timeout={self.rclone_config.get('timeout', '5m')}",
             # Google Drive specific flags
             f"--drive-export-formats={self.rclone_config['drive_export']}",
             "--drive-skip-shortcuts",  # Skip Google Drive shortcuts to prevent errors
         ]
+        # Optional fast-list toggle
+        if self.rclone_config.get("fast_list"):
+            base_cmd.append("--fast-list")
+        # Optional Drive chunk tuning if provided
+        if self.rclone_config.get("drive_chunk_size"):
+            base_cmd.append(f"--drive-chunk-size={self.rclone_config['drive_chunk_size']}")
+        if self.rclone_config.get("drive_upload_cutoff"):
+            base_cmd.append(f"--drive-upload-cutoff={self.rclone_config['drive_upload_cutoff']}")
         
         if additional_flags:
             base_cmd.extend(additional_flags)
@@ -262,6 +275,9 @@ class RcloneRunner:
         """Execute rclone command and parse output."""
         
         result = SyncResult(status="running")
+        # Lightweight events setting: avoid collecting/storing individual per-file events
+        # when disabled. This reduces DB writes on long runs.
+        lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
         
         try:
             # Log the exact command for debugging
@@ -310,8 +326,8 @@ class RcloneRunner:
                         if not line:
                             continue
                         
-                        # Parse JSON log line
-                        event = self.parser.parse_line(line)
+                        # Parse JSON log line (events) or stats
+                        event = None if lightweight_events else self.parser.parse_line(line)
                         if event:
                             result.events.append(event)
                             logger.debug(f"Created event: {event.action} for {event.file_path}")
@@ -334,27 +350,33 @@ class RcloneRunner:
                                 result.errors += 1  # Count as error for tracking
                                 logger.debug(f"Conflict with file: {event.file_path}")
                         else:
-                            # Try to parse as stats line (fallback)
-                            stats = self.parser.parse_stats_line(line)
-                            if stats:
-                                logger.debug(f"Parsed stats: {stats}")
-                                # Update result with stats data
-                                result.num_added = stats.get("files", 0)
-                                result.bytes_transferred = stats.get("transferred", 0)
-                                result.errors = stats.get("errors", 0)
-                                
-                                # Create a generic file event for stats-based sync
-                                if stats.get("files", 0) > 0:
+                            parsed_stats: Optional[Dict[str, int]] = None
+                            # If JSON log enabled (it is), try to extract stats from the JSON 'msg' field
+                            try:
+                                obj = json.loads(line)
+                                msg = obj.get("msg", "") if isinstance(obj, dict) else ""
+                                if msg:
+                                    parsed_stats = self.parser.parse_stats_line(msg)
+                            except Exception:
+                                # Not JSON or unexpected format; try raw line fallback
+                                parsed_stats = self.parser.parse_stats_line(line)
+
+                            if parsed_stats:
+                                logger.debug(f"Parsed stats: {parsed_stats}")
+                                result.num_added = parsed_stats.get("files", 0)
+                                result.bytes_transferred = parsed_stats.get("transferred", 0)
+                                result.errors = parsed_stats.get("errors", 0)
+                                if not lightweight_events and parsed_stats.get("files", 0) > 0:
                                     generic_event = SyncEvent(
                                         timestamp=datetime.utcnow(),
-                                        action="added",  # Assume all files are new for stats
+                                        action="added",
                                         file_path="<stats-based-sync>",
-                                        file_size=stats.get("transferred", 0),
-                                        message=f"Stats: {stats.get('files', 0)} files, {stats.get('transferred', 0)} bytes",
+                                        file_size=parsed_stats.get("transferred", 0),
+                                        message=f"Stats: {parsed_stats.get('files', 0)} files, {parsed_stats.get('transferred', 0)} bytes",
                                         file_hash=None
                                     )
                                     result.events.append(generic_event)
-                                    logger.debug(f"Created stats-based event: {stats.get('files', 0)} files")
+                                    logger.debug(f"Created stats-based event: {parsed_stats.get('files', 0)} files")
                             else:
                                 # Log non-parsed lines for debugging
                                 if line.startswith('{') and ('file' in line or 'object' in line):

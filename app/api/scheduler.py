@@ -226,18 +226,21 @@ def sync_job() -> None:
         run.errors = result.errors
         run.finished_at = datetime.utcnow()
         
-        # Add file events
-        for event in result.events:
-            file_event = FileEvent(
-                run_id=run.id,
-                timestamp=event.timestamp,
-                action=event.action,
-                file_path=event.file_path,
-                file_size=event.file_size,
-                file_hash=event.file_hash,
-                message=event.message
-            )
-            db.add(file_event)
+        # Add file events unless lightweight mode is enabled
+        from os import getenv
+        lightweight_events = getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
+        if not lightweight_events:
+            for event in result.events:
+                file_event = FileEvent(
+                    run_id=run.id,
+                    timestamp=event.timestamp,
+                    action=event.action,
+                    file_path=event.file_path,
+                    file_size=event.file_size,
+                    file_hash=event.file_hash,
+                    message=event.message
+                )
+                db.add(file_event)
         
         db.commit()
         
