@@ -193,6 +193,7 @@ class RcloneRunner:
             f"--bwlimit={self.rclone_config['bwlimit']}",
             # Google Drive specific flags
             f"--drive-export-formats={self.rclone_config['drive_export']}",
+            "--drive-skip-shortcuts",  # Skip Google Drive shortcuts to prevent errors
         ]
         
         if additional_flags:
