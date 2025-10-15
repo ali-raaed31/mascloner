@@ -198,6 +198,7 @@ class RcloneRunner:
             f"--timeout={self.rclone_config.get('timeout', '5m')}",
             # Google Drive specific flags
             f"--drive-export-formats={self.rclone_config['drive_export']}",
+            "--drive-shared-with-me",  # Restrict to Shared-with-me items per requested use case
             "--drive-skip-shortcuts",  # Skip Google Drive shortcuts to prevent errors
         ]
         # Optional fast-list toggle
