@@ -169,3 +169,12 @@ class APIClient:
     def validate_config(self) -> Optional[Dict[str, Any]]:
         """Validate configuration."""
         return self._make_request("GET", "/config/validate")
+
+    # Rclone performance tuning
+    def get_rclone_config(self) -> Optional[Dict[str, Any]]:
+        """Get current rclone performance configuration."""
+        return self._make_request("GET", "/rclone/config")
+
+    def update_rclone_config(self, settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update rclone performance configuration."""
+        return self._make_request("POST", "/rclone/config", json=settings)

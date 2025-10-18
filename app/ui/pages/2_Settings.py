@@ -442,7 +442,112 @@ with tab3:
 # ======================
 with tab4:
     st.header("🛠️ System Management")
-    
+
+    # Rclone performance tuning
+    st.subheader("🚀 Rclone Performance")
+
+    rclone_config = api.get_rclone_config() or {}
+    current_transfers = int(rclone_config.get("transfers", 8))
+    current_checkers = int(rclone_config.get("checkers", 16))
+    current_tpslimit = int(rclone_config.get("tpslimit", 25))
+    current_tpslimit_burst = int(rclone_config.get("tpslimit_burst", 100))
+    current_buffer_size = rclone_config.get("buffer_size", "32Mi") or ""
+    current_drive_chunk = rclone_config.get("drive_chunk_size", "64M") or ""
+    current_drive_upload_cutoff = rclone_config.get("drive_upload_cutoff", "128M") or ""
+    current_fast_list = bool(rclone_config.get("fast_list", False))
+
+    with st.form("rclone_performance_form"):
+        st.markdown("""
+        Fine-tune rclone's concurrency and rate limits for Google Drive. Values are stored in `.env` and apply to future sync runs.
+        """)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            transfers = st.number_input(
+                "Concurrent Transfers",
+                min_value=1,
+                max_value=64,
+                value=current_transfers,
+                step=1,
+                help="Number of files uploaded in parallel. Higher uses more bandwidth."
+            )
+        with col2:
+            checkers = st.number_input(
+                "Concurrent Checkers",
+                min_value=1,
+                max_value=128,
+                value=current_checkers,
+                step=1,
+                help="How many verification workers run in parallel."
+            )
+        with col3:
+            tpslimit = st.number_input(
+                "Requests / Second",
+                min_value=1,
+                max_value=1000,
+                value=current_tpslimit,
+                step=1,
+                help="Throttle applied via rclone's pacer to stay within Drive quota."
+            )
+
+        col4, col5 = st.columns(2)
+        with col4:
+            tpslimit_burst = st.number_input(
+                "Burst Allowance",
+                min_value=1,
+                max_value=2000,
+                value=current_tpslimit_burst,
+                step=1,
+                help="Short-term burst capacity for the Drive pacer."
+            )
+        with col5:
+            fast_list_toggle = st.toggle(
+                "Enable fast-list",
+                value=current_fast_list,
+                help="Use rclone --fast-list for more efficient directory scans."
+            )
+
+        buffer_size = st.text_input(
+            "Buffer Size",
+            value=current_buffer_size,
+            help="Per-transfer buffer (e.g. 32Mi). Leave blank to revert to rclone default."
+        )
+        drive_chunk_size = st.text_input(
+            "Drive Chunk Size",
+            value=current_drive_chunk,
+            help="Upload chunk size for Drive (e.g. 64M)."
+        )
+        drive_upload_cutoff = st.text_input(
+            "Drive Upload Cutoff",
+            value=current_drive_upload_cutoff,
+            help="Files larger than this use chunked uploads (e.g. 128M)."
+        )
+
+        st.caption("Changes apply to new syncs. Large increases may require stronger bandwidth/CPU.")
+
+        if st.form_submit_button("💾 Save rclone Settings", type="primary"):
+            payload = {
+                "transfers": int(transfers),
+                "checkers": int(checkers),
+                "tpslimit": int(tpslimit),
+                "tpslimit_burst": int(tpslimit_burst),
+                "buffer_size": buffer_size.strip() or None,
+                "drive_chunk_size": drive_chunk_size.strip() or None,
+                "drive_upload_cutoff": drive_upload_cutoff.strip() or None,
+                "fast_list": bool(fast_list_toggle),
+            }
+
+            with st.spinner("Saving rclone settings..."):
+                result = api.update_rclone_config(payload)
+
+            if result and result.get("success"):
+                st.success("✅ rclone settings saved!")
+                st.info("New values will be used for the next sync job.")
+                st.rerun()
+            else:
+                error_msg = result.get("message", "Unknown error") if result else "API error"
+                st.error(f"❌ Failed to update rclone settings: {error_msg}")
+
     # Database management
     st.subheader("🗄️ Database Management")
     

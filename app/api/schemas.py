@@ -70,6 +70,19 @@ class ApiResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class RcloneConfigRequest(BaseModel):
+    """Request model for rclone performance configuration."""
+
+    transfers: int = Field(..., ge=1, le=64, description="Concurrent file transfers")
+    checkers: int = Field(..., ge=1, le=128, description="Concurrent verification workers")
+    tpslimit: int = Field(..., ge=1, le=1000, description="Requests-per-second cap")
+    tpslimit_burst: int = Field(..., ge=1, le=2000, description="Burst allowance for pacer")
+    buffer_size: Optional[str] = Field(None, description="Buffer size per transfer (e.g. 32Mi)")
+    drive_chunk_size: Optional[str] = Field(None, description="Google Drive chunk size (e.g. 64M)")
+    drive_upload_cutoff: Optional[str] = Field(None, description="Threshold for chunked uploads (e.g. 128M)")
+    fast_list: bool = Field(False, description="Toggle rclone --fast-list optimisation")
+
+
 class GoogleDriveOAuthRequest(BaseModel):
     """Request model for Google Drive OAuth configuration."""
 

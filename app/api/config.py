@@ -92,23 +92,24 @@ class ConfigManager:
     def get_rclone_config(self) -> Dict[str, Any]:
         """Get rclone performance configuration."""
         return {
-            "transfers": int(os.getenv("RCLONE_TRANSFERS", 4)),
-            "checkers": int(os.getenv("RCLONE_CHECKERS", 8)),
-            "tpslimit": int(os.getenv("RCLONE_TPSLIMIT", 10)),
+            "transfers": int(os.getenv("RCLONE_TRANSFERS", 8)),
+            "checkers": int(os.getenv("RCLONE_CHECKERS", 16)),
+            "tpslimit": int(os.getenv("RCLONE_TPSLIMIT", 25)),
+            "tpslimit_burst": int(os.getenv("RCLONE_TPSLIMIT_BURST", 100)),
             "bwlimit": os.getenv("RCLONE_BWLIMIT", "0"),
             "drive_export": os.getenv("RCLONE_DRIVE_EXPORT", "docx,xlsx,pptx"),
             # Use NOTICE by default to reduce per-file INFO logs; stats are still emitted at NOTICE
             "log_level": os.getenv("RCLONE_LOG_LEVEL", "NOTICE"),
             # Tuning and resiliency
             "stats_interval": os.getenv("RCLONE_STATS_INTERVAL", "60s"),
-            "buffer_size": os.getenv("RCLONE_BUFFER_SIZE", "16Mi"),
-            "drive_chunk_size": os.getenv("RCLONE_DRIVE_CHUNK_SIZE", ""),
-            "drive_upload_cutoff": os.getenv("RCLONE_DRIVE_UPLOAD_CUTOFF", ""),
+            "buffer_size": os.getenv("RCLONE_BUFFER_SIZE", "32Mi"),
+            "drive_chunk_size": os.getenv("RCLONE_DRIVE_CHUNK_SIZE", "64M"),
+            "drive_upload_cutoff": os.getenv("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M"),
             "retries": int(os.getenv("RCLONE_RETRIES", 5)),
             "retries_sleep": os.getenv("RCLONE_RETRIES_SLEEP", "10s"),
             "low_level_retries": int(os.getenv("RCLONE_LOW_LEVEL_RETRIES", 10)),
             "timeout": os.getenv("RCLONE_TIMEOUT", "5m"),
-            # Disabled by default due to potential Drive listing caveats; enable explicitly if desired
+            # Disabled by default due to potential Drive listing caveats; toggleable via UI
             "fast_list": os.getenv("RCLONE_FAST_LIST", "0").lower() in ("1", "true", "yes", "on"),
         }
     

@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from dotenv import load_dotenv
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from ..config import config
 from ..db import get_db, get_db_info
 from ..models import ConfigKV, FileEvent, Run
-from ..rclone_runner import RcloneRunner
+from ..rclone_runner import RcloneRunner, get_runner
 from ..scheduler import (
     get_scheduler,
     get_sync_config_from_db,
@@ -21,6 +24,7 @@ from ..scheduler import (
 from ..schemas import (
     ApiResponse,
     ConfigRequest,
+    RcloneConfigRequest,
     FileEventResponse,
     RunResponse,
     ScheduleRequest,
@@ -33,6 +37,74 @@ from ..tree_builder import FileTreeBuilder
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"])
+
+
+def _persist_env_updates(updates: Dict[str, Optional[str]]) -> Path:
+    """Write environment variable updates to the installation .env file."""
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Configuration manager not initialised",
+        )
+
+    base_config = config.get_base_config()
+    env_path = base_config["base_dir"] / ".env"
+
+    existing_lines: List[str] = []
+    if env_path.exists():
+        try:
+            with env_path.open("r", encoding="utf-8") as env_file:
+                existing_lines = env_file.read().splitlines()
+        except Exception as exc:  # pragma: no cover - defensive
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to read .env file: {exc}",
+            ) from exc
+
+    handled = {key: False for key in updates}
+    updated_lines: List[str] = []
+
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            updated_lines.append(line)
+            continue
+
+        key, sep, remainder = line.partition("=")
+        key = key.strip()
+        if not sep or key not in updates:
+            updated_lines.append(line)
+            continue
+
+        value = updates[key]
+        handled[key] = True
+        if value is None:
+            continue  # Remove line when value cleared
+        updated_lines.append(f"{key}={value}")
+
+    for key, value in updates.items():
+        if handled.get(key) or value is None:
+            continue
+        updated_lines.append(f"{key}={value}")
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(updated_lines)
+    if content and not content.endswith("\n"):
+        content = f"{content}\n"
+
+    try:
+        with env_path.open("w", encoding="utf-8") as env_file:
+            env_file.write(content)
+        os.chmod(env_path, 0o600)
+        load_dotenv(str(env_path), override=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write .env file: {exc}",
+        ) from exc
+
+    return env_path
 
 
 @router.get("/health", response_model=Dict[str, str])
@@ -352,6 +424,50 @@ async def update_schedule(schedule_request: ScheduleRequest, db: Session = Depen
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update schedule: {exc}",
         )
+
+
+@router.get("/rclone/config", response_model=Dict[str, Any])
+async def get_rclone_config_settings():
+    """Return current rclone performance configuration."""
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Configuration manager not initialised",
+        )
+    return config.get_rclone_config()
+
+
+@router.post("/rclone/config", response_model=ApiResponse)
+async def update_rclone_config(settings: RcloneConfigRequest):
+    """Persist updated rclone performance settings."""
+
+    def _clean(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        return trimmed or None
+
+    updates = {
+        "RCLONE_TRANSFERS": str(settings.transfers),
+        "RCLONE_CHECKERS": str(settings.checkers),
+        "RCLONE_TPSLIMIT": str(settings.tpslimit),
+        "RCLONE_TPSLIMIT_BURST": str(settings.tpslimit_burst),
+        "RCLONE_BUFFER_SIZE": _clean(settings.buffer_size),
+        "RCLONE_DRIVE_CHUNK_SIZE": _clean(settings.drive_chunk_size),
+        "RCLONE_DRIVE_UPLOAD_CUTOFF": _clean(settings.drive_upload_cutoff),
+        "RCLONE_FAST_LIST": "1" if settings.fast_list else "0",
+    }
+
+    _persist_env_updates(updates)
+
+    # Refresh in-memory configuration for subsequent runs
+    runner = get_runner()
+    runner.rclone_config = config.get_rclone_config()
+
+    return ApiResponse(
+        success=True,
+        message="Rclone performance settings updated",
+    )
 
 
 @router.post("/schedule/start", response_model=ApiResponse)

@@ -157,12 +157,18 @@ class RcloneRunner:
         else:
             # Fallback defaults
             self.rclone_config = {
-                "transfers": 4,
-                "checkers": 8,
-                "tpslimit": 10,
+                "transfers": 8,
+                "checkers": 16,
+                "tpslimit": 25,
+                "tpslimit_burst": 100,
                 "bwlimit": "0",
                 "drive_export": "docx,xlsx,pptx",
                 "log_level": "INFO",
+                "stats_interval": "60s",
+                "buffer_size": "32Mi",
+                "drive_chunk_size": "64M",
+                "drive_upload_cutoff": "128M",
+                "fast_list": False,
             }
         self._remote_type_cache: Dict[str, Optional[str]] = {}
     
@@ -186,12 +192,12 @@ class RcloneRunner:
             "--stats-log-level=NOTICE",  # Ensure stats are included in JSON logs
             f"--stats={self.rclone_config.get('stats_interval', '60s')}",
             "--stats-one-line",
-            # Removed --fast-list as it can cause issues with some Google Drive folders
+            # Fast-list stays optional to avoid edge cases with shared drives
             f"--checkers={self.rclone_config['checkers']}",
             f"--transfers={self.rclone_config['transfers']}",
             f"--tpslimit={self.rclone_config['tpslimit']}",
             f"--bwlimit={self.rclone_config['bwlimit']}",
-            f"--buffer-size={self.rclone_config.get('buffer_size', '16Mi')}",
+            f"--buffer-size={self.rclone_config.get('buffer_size', '32Mi')}",
             f"--retries={self.rclone_config.get('retries', 5)}",
             f"--retries-sleep={self.rclone_config.get('retries_sleep', '10s')}",
             f"--low-level-retries={self.rclone_config.get('low_level_retries', 10)}",
@@ -201,6 +207,8 @@ class RcloneRunner:
             "--drive-shared-with-me",  # Restrict to Shared-with-me items per requested use case
             "--drive-skip-shortcuts",  # Skip Google Drive shortcuts to prevent errors
         ]
+        if self.rclone_config.get("tpslimit_burst"):
+            base_cmd.append(f"--tpslimit-burst={self.rclone_config['tpslimit_burst']}")
         # Optional fast-list toggle
         if self.rclone_config.get("fast_list"):
             base_cmd.append("--fast-list")
