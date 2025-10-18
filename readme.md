@@ -98,32 +98,38 @@ sudo bash ops/scripts/install.sh
 - ✅ Initializes database with encryption
 - ✅ Installs and starts systemd services
 - ✅ Configures firewall and log rotation
-
 ### Post-Installation Configuration
 
 #### 1. Configure Google Drive
 
-```bash
+2. **Configure OAuth Consent Screen:**
+   - Choose "Internal" (for Google Workspace) or "External" and publish the app
+   - Add the Google Drive API scope you intend to use; we recommend read-only: `https://www.googleapis.com/auth/drive.readonly`
+   - Set developer contact information
 # Via Setup Wizard UI or manually:
-sudo -u mascloner rclone config create gdrive drive \
-  --drive-scope drive.readonly
-
-# Test connection
-sudo -u mascloner rclone lsd gdrive:
-```
-
-##### 🚀 Custom OAuth Setup (Better Quotas)
-
+4. **Save your OAuth credentials:**
+   - Preferred: Open the web UI → Setup Wizard → Google Drive → enter Client ID and Client Secret → Save. The API encrypts and hot-reloads them (no service restart needed).
+   - Optional (manual): Add to `/srv/mascloner/.env` and ensure file perms are 600. If you edit the file directly, restart services:
+     ```bash
+     sudo systemctl restart mascloner-api mascloner-ui
+     ```
 For Google Workspace admins, using custom OAuth credentials provides dedicated API quotas instead of shared rclone defaults:
+5. **Authorize and connect (token flow):**
+   - On any machine with a browser, run one of the following to generate a token (then copy the JSON):
+     ```bash
+     # If Client ID/Secret are saved in the API/UI or exported in your shell
+     rclone authorize "drive"
 
-**Benefits:**
-- 🎯 **Dedicated API quotas** (not shared with other rclone users)
-- 📈 **Better performance** for high-usage scenarios  
-- 🎛️ **Full control** over quota management and monitoring
+     # Or explicitly pass your credentials
+     rclone authorize "drive" "your_client_id" "your_client_secret"
+     ```
+   - Paste the token JSON into the Setup Wizard and click “Create rclone config”. The backend will create/update the `gdrive` remote.
 
-**Setup Steps:**
+   Notes:
+   - The token should include a refresh_token for long-lived access. If missing, publish your app or use Internal (Workspace) and re-authorize.
+   - Remote creation can take up to ~90 seconds; if you see a temporary 504 timeout, wait a moment and check the Google Drive test again or retry.
 
-1. **Create Google Cloud Project:**
+For more details and troubleshooting, see `docs/google_oauth_notes.md`.
    - Go to [Google Cloud Console](https://console.developers.google.com/)
    - Create new project or select existing
    - Enable Google Drive API
@@ -135,12 +141,8 @@ For Google Workspace admins, using custom OAuth credentials provides dedicated A
 
 3. **Create OAuth Credentials:**
    - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
-   - Choose "Desktop app" as application type
-   - Copy the Client ID and Client Secret
 
 4. **Set Environment Variables:**
-   ```bash
-   # Add to /srv/mascloner/.env
    GDRIVE_OAUTH_CLIENT_ID="your_client_id_here"
    GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret_here"
    
