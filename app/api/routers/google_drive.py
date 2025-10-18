@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import configparser
 import json
 import logging
+import os
 import subprocess
+import tempfile
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pathlib import Path
-import os
 try:
     from dotenv import load_dotenv
 except Exception:  # optional dependency in some test envs
@@ -26,6 +29,81 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/oauth/google-drive", tags=["google-drive"])
+
+RCLONE_REMOTE_NAME = "gdrive"
+
+
+def _load_rclone_config(config_path: Path) -> configparser.ConfigParser:
+    """Load the rclone config file, returning an empty parser if missing."""
+
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str  # Preserve key casing for rclone
+
+    if config_path.exists():
+        try:
+            with config_path.open("r", encoding="utf-8") as handle:
+                parser.read_file(handle)
+        except configparser.Error as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"Invalid rclone config at {config_path}: {exc}") from exc
+
+    return parser
+
+
+def _write_rclone_config(config_path: Path, parser: configparser.ConfigParser) -> None:
+    """Persist the rclone config atomically with safe permissions."""
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Optional[Path] = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            delete=False,
+            dir=str(config_path.parent),
+            encoding="utf-8",
+        ) as tmp_file:
+            parser.write(tmp_file)
+            tmp_path = Path(tmp_file.name)
+
+        os.replace(tmp_path, config_path)
+        os.chmod(config_path, 0o600)
+    finally:
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:  # pragma: no cover - cleanup best effort
+                pass
+
+
+def _update_rclone_remote(config_path: Path, updates: Dict[str, Optional[str]]) -> None:
+    """Apply updates to the gdrive remote configuration."""
+
+    try:
+        parser = _load_rclone_config(config_path)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    if not parser.has_section(RCLONE_REMOTE_NAME):
+        parser.add_section(RCLONE_REMOTE_NAME)
+
+    for key, value in updates.items():
+        if value is None:
+            if parser.has_option(RCLONE_REMOTE_NAME, key):
+                parser.remove_option(RCLONE_REMOTE_NAME, key)
+        else:
+            parser.set(RCLONE_REMOTE_NAME, key, value)
+
+    try:
+        _write_rclone_config(config_path, parser)
+    except Exception as exc:  # pragma: no cover - file system errors
+        logger.error("Failed to write rclone config: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write rclone config: {exc}",
+        ) from exc
 
 
 @router.post("", response_model=ApiResponse)
@@ -46,76 +124,52 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
             )
 
         base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        rclone_config_path = base_config["base_dir"] / base_config["rclone_conf"]
 
-        try:
-            subprocess.run(
-                ["rclone", "--config", rclone_config, "config", "delete", "gdrive"],
-                capture_output=True,
-                timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            pass
-
-        cmd = [
-            "rclone",
-            "--config",
-            rclone_config,
-            "config",
-            "create",
-            "gdrive",
-            "drive",
-            f"scope={request.scope}",
-            f"token={request.token}",
-        ]
+        normalized_token = json.dumps(token_data, separators=(",", ":"))
 
         # Get custom OAuth credentials from environment (prioritized over request)
         oauth_config = config.get_gdrive_oauth_config()
         client_id = oauth_config.get("client_id") or request.client_id
         client_secret = oauth_config.get("client_secret") or request.client_secret
 
+        updates: Dict[str, Optional[str]] = {
+            "type": "drive",
+            "scope": request.scope,
+            "token": normalized_token,
+        }
+
+        if client_id:
+            updates["client_id"] = client_id
+        else:
+            updates["client_id"] = None
+
+        if client_secret:
+            updates["client_secret"] = client_secret
+        else:
+            updates["client_secret"] = None
+
+        _update_rclone_remote(rclone_config_path, updates)
+
         if client_id and client_secret:
-            cmd.extend([f"client_id={client_id}", f"client_secret={client_secret}"])
             logger.info("Using custom OAuth credentials for Google Drive configuration")
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        except subprocess.TimeoutExpired as texc:
-            logger.error("rclone config create timed out: %s", texc)
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Timed out configuring Google Drive via rclone. Please retry; check network connectivity if it persists.",
+        logger.info("Google Drive configuration updated via OAuth token.")
+
+        # Warn if token lacks refresh_token (might stop working soon)
+        warnings = []
+        if "refresh_token" not in token_data:
+            warn_msg = (
+                "Token has no refresh_token; access may expire soon. "
+                "Consider re-authorizing via rclone config with offline access or publish your OAuth app."
             )
+            logger.warning(warn_msg)
+            warnings.append(warn_msg)
 
-        if result.returncode == 0:
-            logger.info("Google Drive configured successfully via OAuth.")
-            # Ensure rclone.conf has strict permissions
-            try:
-                Path(rclone_config).parent.mkdir(parents=True, exist_ok=True)
-                os.chmod(rclone_config, 0o600)
-            except Exception as perm_exc:
-                logger.warning("Failed to set permissions on rclone config: %s", perm_exc)
-
-            # Warn if token lacks refresh_token (might stop working soon)
-            warnings = []
-            if "refresh_token" not in token_data:
-                warn_msg = (
-                    "Token has no refresh_token; access may expire soon. "
-                    "Consider re-authorizing via rclone config with offline access or publish your OAuth app."
-                )
-                logger.warning(warn_msg)
-                warnings.append(warn_msg)
-
-            return ApiResponse(
-                success=True,
-                message="Google Drive configured successfully",
-                data={"warnings": warnings} if warnings else None,
-            )
-
-        logger.error("Google Drive configuration failed: %s", result.stderr)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result.stderr or "Failed to configure Google Drive",
+        return ApiResponse(
+            success=True,
+            message="Google Drive configured successfully",
+            data={"warnings": warnings} if warnings else None,
         )
 
     except HTTPException:
@@ -372,22 +426,24 @@ async def remove_google_drive_config():
     """Remove Google Drive configuration."""
     try:
         base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
+        rclone_config_path = base_config["base_dir"] / base_config["rclone_conf"]
 
-        result = subprocess.run(
-            ["rclone", "--config", rclone_config, "config", "delete", "gdrive"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        if result.returncode == 0:
+        if not rclone_config_path.exists():
             return ApiResponse(success=True, message="Google Drive configuration removed successfully")
 
-        return ApiResponse(
-            success=False,
-            message=f"Failed to remove configuration: {result.stderr or 'Unknown error'}",
-        )
+        try:
+            parser = _load_rclone_config(rclone_config_path)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            ) from exc
+
+        if parser.remove_section(RCLONE_REMOTE_NAME):
+            _write_rclone_config(rclone_config_path, parser)
+            return ApiResponse(success=True, message="Google Drive configuration removed successfully")
+
+        return ApiResponse(success=True, message="Google Drive configuration not found")
 
     except Exception as exc:  # pragma: no cover
         logger.error("Google Drive config removal error: %s", exc)
