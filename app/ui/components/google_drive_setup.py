@@ -77,7 +77,12 @@ class GoogleDriveSetup:
                 
                 if client_id and client_secret:
                     st.markdown(f"""
-                    **With custom OAuth, use this command instead:**
+                    **With custom OAuth configured, you can use the simple command:**
+                    ```bash
+                    rclone authorize "drive"
+                    ```
+                    
+                    **Or explicitly specify credentials:**
                     ```bash
                     rclone authorize "drive" "{client_id}" "{client_secret}"
                     ```
@@ -206,7 +211,8 @@ class GoogleDriveSetup:
                         st.text_input("Client Secret:", value=client_secret, disabled=True, key="advanced_client_secret")
                     
                     st.markdown("**Use these credentials with rclone:**")
-                    st.code(f'rclone authorize "drive" "{client_id}" "{client_secret}"')
+                    st.code(f'rclone authorize "drive"')
+                    st.info("💡 **Tip:** Since credentials are in environment variables, rclone will use them automatically. You can also explicitly specify them if needed.")
                 else:
                     st.warning("⚠️ Custom OAuth credentials not properly configured")
             else:
@@ -408,8 +414,10 @@ class GoogleDriveSetup:
                     st.markdown(f"""
                     **Run this command on ANY machine with a web browser:**
                     ```bash
-                    rclone authorize "drive" "{client_id}" "{client_secret}"
+                    rclone authorize "drive"
                     ```
+                    
+                    **Note:** Since OAuth credentials are configured in environment variables, rclone will automatically use them.
                     """)
                     
                     # Also show the credentials for easy copying

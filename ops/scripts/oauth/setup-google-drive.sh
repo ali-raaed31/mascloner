@@ -98,13 +98,17 @@ EOF
 
     if [[ -n "$custom_client_id" && -n "$custom_client_secret" ]]; then
         cat <<EOF
-${GREEN}rclone authorize "drive" "$custom_client_id" "$custom_client_secret"${NC}
+${GREEN}rclone authorize "drive"${NC}
 
 ${BLUE}Custom OAuth detected! This will use your dedicated API quotas.${NC}
+${YELLOW}Since OAuth credentials are set in environment variables, rclone will use them automatically.${NC}
 
 ${YELLOW}Your credentials:${NC}
 ${BLUE}Client ID:${NC} $custom_client_id
 ${BLUE}Client Secret:${NC} $custom_client_secret
+
+${YELLOW}Alternative (explicit credentials):${NC}
+${GREEN}rclone authorize "drive" "$custom_client_id" "$custom_client_secret"${NC}
 EOF
     else
         cat <<EOF
