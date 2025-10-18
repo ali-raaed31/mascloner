@@ -61,7 +61,7 @@ with st.container():
 st.markdown("---")
 
 # Tabbed interface
-tab1, tab2, tab3 = st.tabs(["⏰ Schedule", "🔧 Remote Testing", "🛠️ System"])
+tab1, tab2, tab3, tab4 = st.tabs(["⏰ Schedule", "🔧 Remote Testing", "🔑 OAuth Settings", "🛠️ System"])
 
 # ======================
 # TAB 1: SCHEDULE SETTINGS
@@ -304,9 +304,143 @@ with tab2:
             st.switch_page("pages/4_Setup_Wizard.py")
 
 # ======================
-# TAB 3: SYSTEM SETTINGS
+# TAB 3: OAUTH SETTINGS
 # ======================
 with tab3:
+    st.header("🔑 Google Drive OAuth Settings")
+    st.markdown("Configure custom OAuth credentials for better API quotas and performance.")
+    
+    # Get current OAuth configuration
+    oauth_config = api.get_google_drive_oauth_config() or {}
+    has_custom_oauth = oauth_config.get("has_custom_oauth", False)
+    current_client_id = oauth_config.get("client_id", "")
+    
+    # Current status
+    if has_custom_oauth:
+        st.success("✅ Custom OAuth credentials are configured")
+        st.info(f"**Client ID:** `{current_client_id}`")
+        st.info("**Client Secret:** `***` (hidden for security)")
+    else:
+        st.warning("⚠️ No custom OAuth credentials configured")
+        st.info("Using default rclone OAuth (shared quotas). Configure custom credentials for better performance.")
+    
+    st.markdown("---")
+    
+    # OAuth configuration form
+    with st.form("oauth_config_form"):
+        st.subheader("🔧 Configure OAuth Credentials")
+        
+        st.markdown("""
+        **To get your OAuth credentials:**
+        1. Go to [Google Cloud Console](https://console.developers.google.com/)
+        2. Create a new project or select existing
+        3. Enable Google Drive API
+        4. Configure OAuth consent screen (choose "Internal" for Google Workspace)
+        5. Add scopes: `drive`, `drive.metadata.readonly`, `docs`
+        6. Create OAuth client ID as "Desktop app" type
+        7. Copy the Client ID and Client Secret below
+        """)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            client_id = st.text_input(
+                "Client ID",
+                value=current_client_id if has_custom_oauth else "",
+                placeholder="123456789-abcdef.apps.googleusercontent.com",
+                help="Your Google OAuth Client ID"
+            )
+        
+        with col2:
+            client_secret = st.text_input(
+                "Client Secret",
+                type="password",
+                placeholder="GOCSPX-abcdef123456",
+                help="Your Google OAuth Client Secret"
+            )
+        
+        # Form submission
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            save_oauth = st.form_submit_button("💾 Save OAuth Credentials", type="primary")
+        
+        with col2:
+            clear_oauth = st.form_submit_button("🗑️ Clear OAuth Credentials", type="secondary")
+        
+        if save_oauth:
+            if client_id and client_secret:
+                with st.spinner("Saving OAuth credentials..."):
+                    result = api.save_google_drive_oauth_config(client_id, client_secret)
+                    
+                    if result and result.get("success"):
+                        st.success("✅ OAuth credentials saved successfully!")
+                        st.info("🔄 **Restart required:** Please restart MasCloner services for changes to take effect.")
+                        st.code("sudo systemctl restart mascloner-api mascloner-scheduler")
+                        st.rerun()
+                    else:
+                        error_msg = result.get("message", "Unknown error") if result else "API error"
+                        st.error(f"❌ Failed to save OAuth credentials: {error_msg}")
+            else:
+                st.error("❌ Both Client ID and Client Secret are required")
+        
+        if clear_oauth:
+            with st.spinner("Clearing OAuth credentials..."):
+                # Clear by setting empty values
+                result = api.save_google_drive_oauth_config("", "")
+                
+                if result and result.get("success"):
+                    st.success("✅ OAuth credentials cleared!")
+                    st.info("🔄 **Restart required:** Please restart MasCloner services for changes to take effect.")
+                    st.code("sudo systemctl restart mascloner-api mascloner-scheduler")
+                    st.rerun()
+                else:
+                    error_msg = result.get("message", "Unknown error") if result else "API error"
+                    st.error(f"❌ Failed to clear OAuth credentials: {error_msg}")
+    
+    st.markdown("---")
+    
+    # Benefits and usage
+    with st.expander("ℹ️ About Custom OAuth", expanded=True):
+        st.markdown("""
+        **Benefits of Custom OAuth:**
+        - 🎯 **Dedicated API quotas** (not shared with other rclone users)
+        - 📈 **Better performance** for high-usage scenarios
+        - 🎛️ **Full control** over quota management and monitoring
+        - 🔒 **Enhanced security** with your own credentials
+        
+        **How it works:**
+        1. Your credentials are encrypted and stored securely
+        2. MasCloner automatically uses them for all Google Drive operations
+        3. The UI will show the correct `rclone authorize` commands with your credentials
+        4. You get better API quotas and performance
+        
+        **Security:**
+        - Credentials are encrypted using Fernet encryption
+        - Stored in the `.env` file with restricted permissions (600)
+        - Never logged or exposed in plain text
+        """)
+    
+    # Test current configuration
+    if has_custom_oauth:
+        st.markdown("---")
+        st.subheader("🧪 Test Current Configuration")
+        
+        if st.button("🔍 Test OAuth Configuration", use_container_width=True):
+            with st.spinner("Testing OAuth configuration..."):
+                # Test by trying to get OAuth config
+                test_result = api.get_google_drive_oauth_config()
+                if test_result and test_result.get("has_custom_oauth"):
+                    st.success("✅ OAuth configuration is valid and active")
+                    st.info("Your custom OAuth credentials are properly configured and will be used for all Google Drive operations.")
+                else:
+                    st.error("❌ OAuth configuration test failed")
+                    st.warning("The credentials may not be properly loaded. Try restarting the services.")
+
+# ======================
+# TAB 4: SYSTEM SETTINGS
+# ======================
+with tab4:
     st.header("🛠️ System Management")
     
     # Database management

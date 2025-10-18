@@ -70,12 +70,34 @@ class GoogleDriveSetup:
             if oauth_config and oauth_config.get("has_custom_oauth"):
                 has_custom_oauth = True
                 st.success("🎉 **Custom OAuth credentials detected!** You'll get better API quotas.")
-                st.markdown("""
-                **With custom OAuth, use this command instead:**
-                ```bash
-                rclone authorize "drive" "YOUR_CLIENT_ID" "YOUR_CLIENT_SECRET"
-                ```
-                """)
+                
+                # Get the actual client ID and secret
+                client_id = oauth_config.get("client_id", "")
+                client_secret = oauth_config.get("client_secret", "")
+                
+                if client_id and client_secret:
+                    st.markdown(f"""
+                    **With custom OAuth, use this command instead:**
+                    ```bash
+                    rclone authorize "drive" "{client_id}" "{client_secret}"
+                    ```
+                    """)
+                    
+                    # Show credentials for easy copying
+                    with st.expander("📋 Copy Credentials", expanded=False):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.text_input("Client ID:", value=client_id, disabled=True, key="setup_client_id", help="Copy this to use in the command above")
+                        with col2:
+                            st.text_input("Client Secret:", value=client_secret, disabled=True, key="setup_client_secret", help="Copy this to use in the command above")
+                else:
+                    st.warning("⚠️ Custom OAuth credentials not found in environment variables")
+                    st.markdown("""
+                    **Use the default command:**
+                    ```bash
+                    rclone authorize "drive"
+                    ```
+                    """)
             else:
                 st.info("💡 **Tip:** For better API quotas, consider setting up custom OAuth credentials in the environment variables.")
             
@@ -171,8 +193,22 @@ class GoogleDriveSetup:
             oauth_config = self.api._make_request("GET", "/oauth/google-drive/oauth-config")
             if oauth_config and oauth_config.get("has_custom_oauth"):
                 st.success("✅ Custom OAuth credentials are configured")
-                if oauth_config.get("client_id"):
-                    st.code(f"Client ID: {oauth_config['client_id']}")
+                
+                client_id = oauth_config.get("client_id", "")
+                client_secret = oauth_config.get("client_secret", "")
+                
+                if client_id and client_secret:
+                    st.markdown("**Current credentials:**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.text_input("Client ID:", value=client_id, disabled=True, key="advanced_client_id")
+                    with col2:
+                        st.text_input("Client Secret:", value=client_secret, disabled=True, key="advanced_client_secret")
+                    
+                    st.markdown("**Use these credentials with rclone:**")
+                    st.code(f'rclone authorize "drive" "{client_id}" "{client_secret}"')
+                else:
+                    st.warning("⚠️ Custom OAuth credentials not properly configured")
             else:
                 st.warning("⚠️ No custom OAuth credentials found in environment variables")
         
@@ -363,12 +399,33 @@ class GoogleDriveSetup:
         with st.expander("📋 Step 1: Get New OAuth Token", expanded=True):
             if has_custom_oauth:
                 st.success("🎉 **Custom OAuth detected!** You'll get better API quotas.")
-                st.markdown("""
-                **Run this command on ANY machine with a web browser:**
-                ```bash
-                rclone authorize "drive" "YOUR_CLIENT_ID" "YOUR_CLIENT_SECRET"
-                ```
-                """)
+                
+                # Get the actual client ID and secret
+                client_id = oauth_config.get("client_id", "")
+                client_secret = oauth_config.get("client_secret", "")
+                
+                if client_id and client_secret:
+                    st.markdown(f"""
+                    **Run this command on ANY machine with a web browser:**
+                    ```bash
+                    rclone authorize "drive" "{client_id}" "{client_secret}"
+                    ```
+                    """)
+                    
+                    # Also show the credentials for easy copying
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.text_input("Client ID:", value=client_id, disabled=True, help="Copy this to use in the command above")
+                    with col2:
+                        st.text_input("Client Secret:", value=client_secret, disabled=True, help="Copy this to use in the command above")
+                else:
+                    st.warning("⚠️ Custom OAuth credentials not found in environment variables")
+                    st.markdown("""
+                    **Run this command on ANY machine with a web browser:**
+                    ```bash
+                    rclone authorize "drive"
+                    ```
+                    """)
             else:
                 st.markdown("""
                 **Run this command on ANY machine with a web browser:**

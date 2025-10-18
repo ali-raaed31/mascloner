@@ -101,6 +101,10 @@ EOF
 ${GREEN}rclone authorize "drive" "$custom_client_id" "$custom_client_secret"${NC}
 
 ${BLUE}Custom OAuth detected! This will use your dedicated API quotas.${NC}
+
+${YELLOW}Your credentials:${NC}
+${BLUE}Client ID:${NC} $custom_client_id
+${BLUE}Client Secret:${NC} $custom_client_secret
 EOF
     else
         cat <<EOF

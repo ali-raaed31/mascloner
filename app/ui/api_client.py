@@ -142,6 +142,14 @@ class APIClient:
         """Get Google Drive configuration status."""
         return self._make_request("GET", "/oauth/google-drive/status")
     
+    def save_google_drive_oauth_config(self, client_id: str, client_secret: str) -> Optional[Dict[str, Any]]:
+        """Save Google Drive OAuth configuration."""
+        data = {
+            "client_id": client_id,
+            "client_secret": client_secret
+        }
+        return self._make_request("POST", "/oauth/google-drive/oauth-config", json=data)
+    
     def test_google_drive_connection(self) -> Optional[Dict[str, Any]]:
         """Test Google Drive connection."""
         return self._make_request("POST", "/oauth/google-drive/test")

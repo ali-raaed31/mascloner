@@ -153,6 +153,9 @@ For Google Workspace admins, using custom OAuth credentials provides dedicated A
    # The setup wizard will automatically detect and use custom credentials
    # Or manually authorize with custom credentials:
    rclone authorize "drive" "your_client_id" "your_client_secret"
+   
+   # Example with actual credentials:
+   rclone authorize "drive" "123456789-abcdef.apps.googleusercontent.com" "GOCSPX-abcdef123456"
    ```
 
 **Security Note:** Credentials are automatically encrypted using the system's Fernet key and stored securely.

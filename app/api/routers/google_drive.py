@@ -107,6 +107,75 @@ async def get_google_drive_oauth_config():
         return {"client_id": None, "client_secret": None, "has_custom_oauth": False}
 
 
+@router.post("/oauth-config")
+async def save_google_drive_oauth_config(request: Dict[str, str]):
+    """Save Google Drive OAuth configuration."""
+    try:
+        client_id = request.get("client_id", "").strip()
+        client_secret = request.get("client_secret", "").strip()
+        
+        if not client_id or not client_secret:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Both client_id and client_secret are required"
+            )
+        
+        # Encrypt the credentials
+        encrypted_client_id = config.obscure_password(client_id)
+        encrypted_client_secret = config.obscure_password(client_secret)
+        
+        # Update environment variables in .env file
+        base_config = config.get_base_config()
+        env_file_path = base_config["base_dir"] / ".env"
+        
+        # Read current .env file
+        env_content = ""
+        if env_file_path.exists():
+            with open(env_file_path, 'r') as f:
+                env_content = f.read()
+        
+        # Update or add OAuth variables
+        lines = env_content.split('\n')
+        updated_lines = []
+        oauth_vars_added = {"client_id": False, "client_secret": False}
+        
+        for line in lines:
+            if line.startswith("GDRIVE_OAUTH_CLIENT_ID="):
+                updated_lines.append(f'GDRIVE_OAUTH_CLIENT_ID="{encrypted_client_id}"')
+                oauth_vars_added["client_id"] = True
+            elif line.startswith("GDRIVE_OAUTH_CLIENT_SECRET="):
+                updated_lines.append(f'GDRIVE_OAUTH_CLIENT_SECRET="{encrypted_client_secret}"')
+                oauth_vars_added["client_secret"] = True
+            else:
+                updated_lines.append(line)
+        
+        # Add missing variables
+        if not oauth_vars_added["client_id"]:
+            updated_lines.append(f'GDRIVE_OAUTH_CLIENT_ID="{encrypted_client_id}"')
+        if not oauth_vars_added["client_secret"]:
+            updated_lines.append(f'GDRIVE_OAUTH_CLIENT_SECRET="{encrypted_client_secret}"')
+        
+        # Write updated .env file
+        with open(env_file_path, 'w') as f:
+            f.write('\n'.join(updated_lines))
+        
+        # Set proper permissions
+        import os
+        os.chmod(env_file_path, 0o600)
+        
+        logger.info("Google Drive OAuth credentials saved successfully")
+        return {"success": True, "message": "OAuth credentials saved successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to save OAuth config: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save OAuth credentials: {exc}"
+        )
+
+
 @router.get("/status", response_model=GoogleDriveStatusResponse)
 async def get_google_drive_status():
     """Get Google Drive configuration status."""
