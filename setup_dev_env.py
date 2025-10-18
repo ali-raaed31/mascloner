@@ -21,6 +21,9 @@ def setup_dev_environment():
 type = drive
 scope = drive.readonly
 token = {"access_token":"dummy_token","token_type":"Bearer","refresh_token":"dummy_refresh","expiry":"2024-01-01T00:00:00.000Z"}
+# Uncomment and set these for custom OAuth (better quotas):
+# client_id = your_google_client_id
+# client_secret = your_google_client_secret
 
 [ncwebdav]
 type = webdav
@@ -70,6 +73,7 @@ RCLONE_TPSLIMIT=10
 RCLONE_BWLIMIT=0
 RCLONE_DRIVE_EXPORT=docx,xlsx,pptx
 RCLONE_LOG_LEVEL=INFO
+RCLONE_FAST_LIST=0
 
 # Sync Configuration (dummy values for development)
 GDRIVE_REMOTE=gdrive
@@ -79,6 +83,11 @@ NC_DEST_PATH=Backups/GoogleDrive
 NC_WEBDAV_URL=https://cloud.example.com/remote.php/dav/files/username/
 NC_USER=username
 NC_PASS_OBSCURED=dummy_obscured_password
+
+# Google Drive OAuth (optional - improves quota)
+# Set these to use custom OAuth credentials for better API quotas
+# GDRIVE_OAUTH_CLIENT_ID=
+# GDRIVE_OAUTH_CLIENT_SECRET=
 """
     
     env_path = Path(".env")

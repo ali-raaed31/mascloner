@@ -75,6 +75,16 @@ EOF
         return 1
     fi
 
+    # Check for custom OAuth credentials
+    local custom_client_id=""
+    local custom_client_secret=""
+    
+    if [[ -n "${GDRIVE_OAUTH_CLIENT_ID:-}" && -n "${GDRIVE_OAUTH_CLIENT_SECRET:-}" ]]; then
+        custom_client_id="$GDRIVE_OAUTH_CLIENT_ID"
+        custom_client_secret="$GDRIVE_OAUTH_CLIENT_SECRET"
+        success "Custom OAuth credentials detected! You'll get better API quotas."
+    fi
+
     # Show the authorize command
     cat <<EOF
 
@@ -84,7 +94,33 @@ ${PURPLE}═══════════════════════�
 
 ${YELLOW}On ANY machine with a web browser, run this command:${NC}
 
+EOF
+
+    if [[ -n "$custom_client_id" && -n "$custom_client_secret" ]]; then
+        cat <<EOF
+${GREEN}rclone authorize "drive" "$custom_client_id" "$custom_client_secret"${NC}
+
+${BLUE}Custom OAuth detected! This will use your dedicated API quotas.${NC}
+EOF
+    else
+        cat <<EOF
 ${GREEN}rclone authorize "drive" "scope=drive.readonly"${NC}
+
+${BLUE}Using default rclone OAuth (shared quotas). For better performance, consider setting up custom OAuth credentials.${NC}
+
+${YELLOW}Want custom OAuth for better quotas?${NC}
+1. Go to https://console.developers.google.com/
+2. Create project → Enable Google Drive API
+3. OAuth consent screen → Internal (for Workspace)
+4. Credentials → OAuth client ID → Desktop app
+5. Set environment variables:
+   ${GREEN}export GDRIVE_OAUTH_CLIENT_ID="your_client_id"${NC}
+   ${GREEN}export GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret"${NC}
+6. Re-run this script
+EOF
+    fi
+
+    cat <<EOF
 
 ${BLUE}What will happen:${NC}
 1. Your browser will open automatically
@@ -180,21 +216,27 @@ test_connection() {
     log "Testing Google Drive connection..."
     
     # Test with optimized settings
-    if sudo -u "$MASCLONER_USER" timeout 30 rclone \
-        --config "$RCLONE_CONFIG" \
-        --transfers=4 \
-        --checkers=8 \
-        lsd gdrive: >/dev/null 2>&1; then
+    local test_cmd="sudo -u $MASCLONER_USER timeout 30 rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8"
+    
+    # Add --fast-list if enabled in environment
+    if [[ "${RCLONE_FAST_LIST:-0}" =~ ^(1|true|yes|on)$ ]]; then
+        test_cmd="$test_cmd --fast-list"
+    fi
+    
+    if eval "$test_cmd lsd gdrive: >/dev/null 2>&1"; then
         
         success "Google Drive connection successful!"
         
         # Show available folders
         log "Your Google Drive folders:"
-        sudo -u "$MASCLONER_USER" rclone \
-            --config "$RCLONE_CONFIG" \
-            --transfers=4 \
-            --checkers=8 \
-            lsd gdrive: 2>/dev/null | head -10 || echo "  (No folders or permission issues)"
+        local list_cmd="sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8"
+        
+        # Add --fast-list if enabled in environment
+        if [[ "${RCLONE_FAST_LIST:-0}" =~ ^(1|true|yes|on)$ ]]; then
+            list_cmd="$list_cmd --fast-list"
+        fi
+        
+        eval "$list_cmd lsd gdrive: 2>/dev/null | head -10" || echo "  (No folders or permission issues)"
         
         return 0
     else
@@ -224,27 +266,34 @@ EOF
 save_useful_commands() {
     local commands_file="$INSTALL_DIR/etc/rclone-commands.txt"
     
+    # Build base command with optional --fast-list
+    local base_cmd="sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8"
+    if [[ "${RCLONE_FAST_LIST:-0}" =~ ^(1|true|yes|on)$ ]]; then
+        base_cmd="$base_cmd --fast-list"
+    fi
+
     sudo tee "$commands_file" > /dev/null <<EOF
 # Useful rclone commands for Google Drive
 # Generated on $(date)
 
 # List Google Drive folders
-sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8 lsd gdrive:
+$base_cmd lsd gdrive:
 
 # List files in a specific folder
-sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8 ls gdrive:FolderName
+$base_cmd ls gdrive:FolderName
 
 # Show configuration
 sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG config show
 
 # Test sync (dry run)
-sudo -u $MASCLONER_USER rclone --config $RCLONE_CONFIG --transfers=4 --checkers=8 --progress sync gdrive:SourceFolder /destination/path --dry-run
+$base_cmd --progress sync gdrive:SourceFolder /destination/path --dry-run
 
 # Performance environment variables (optional):
 export RCLONE_TRANSFERS=4
 export RCLONE_CHECKERS=8
 export RCLONE_PROGRESS=true
 export RCLONE_DRIVE_CHUNK_SIZE=64M
+export RCLONE_FAST_LIST=1
 EOF
 
     sudo chown mascloner:mascloner "$commands_file"

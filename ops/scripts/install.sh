@@ -285,6 +285,7 @@ RCLONE_TPSLIMIT=10
 RCLONE_BWLIMIT=0
 RCLONE_DRIVE_EXPORT=docx,xlsx,pptx
 RCLONE_LOG_LEVEL=INFO
+RCLONE_FAST_LIST=0
 
 # Sync Configuration (to be configured via UI)
 GDRIVE_REMOTE=gdrive
@@ -294,6 +295,11 @@ NC_DEST_PATH=
 NC_WEBDAV_URL=
 NC_USER=
 NC_PASS_OBSCURED=
+
+# Google Drive OAuth (optional - improves quota)
+# Set these to use custom OAuth credentials for better API quotas
+# GDRIVE_OAUTH_CLIENT_ID=
+# GDRIVE_OAUTH_CLIENT_SECRET=
 EOF
 
     chown "$MASCLONER_USER:$MASCLONER_GROUP" "$INSTALL_DIR/.env"

@@ -124,6 +124,31 @@ class ConfigManager:
             "nc_pass_obscured": os.getenv("NC_PASS_OBSCURED", ""),
         }
     
+    def get_gdrive_oauth_config(self) -> Dict[str, Optional[str]]:
+        """Get Google Drive OAuth configuration with encrypted credentials."""
+        client_id = os.getenv("GDRIVE_OAUTH_CLIENT_ID")
+        client_secret = os.getenv("GDRIVE_OAUTH_CLIENT_SECRET")
+        
+        # Decrypt credentials if they exist and are encrypted
+        if client_id and client_id.startswith("gAAAAAB"):  # Fernet encrypted data starts with this
+            try:
+                client_id = self.reveal_password(client_id)
+            except Exception as e:
+                logger.warning(f"Failed to decrypt GDRIVE_OAUTH_CLIENT_ID: {e}")
+                client_id = None
+        
+        if client_secret and client_secret.startswith("gAAAAAB"):  # Fernet encrypted data starts with this
+            try:
+                client_secret = self.reveal_password(client_secret)
+            except Exception as e:
+                logger.warning(f"Failed to decrypt GDRIVE_OAUTH_CLIENT_SECRET: {e}")
+                client_secret = None
+        
+        return {
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+    
     def obscure_password(self, password: str) -> str:
         """Encrypt password for storage."""
         try:

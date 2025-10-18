@@ -419,6 +419,10 @@ class RcloneRunner:
             rclone_conf = get_rclone_conf_path()
             cmd = ["rclone", "lsd", f"{remote}:", f"--config={rclone_conf}", "--max-depth=1"]
             
+            # Add --fast-list if enabled
+            if self.rclone_config.get("fast_list"):
+                cmd.append("--fast-list")
+            
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -449,6 +453,10 @@ class RcloneRunner:
                 "--no-modtime",
                 "--no-mimetype"
             ]
+            
+            # Add --fast-list if enabled
+            if self.rclone_config.get("fast_list"):
+                cmd.append("--fast-list")
             
             result = subprocess.run(
                 cmd,
@@ -502,6 +510,10 @@ class RcloneRunner:
                 "rclone", "lsd", f"{remote_name}:", "--max-depth=1",
                 f"--config={rclone_conf}"
             ]
+            
+            # Add --fast-list if enabled
+            if self.rclone_config.get("fast_list"):
+                test_cmd.append("--fast-list")
                 
             test_result = subprocess.run(
                 test_cmd,
@@ -539,6 +551,10 @@ class RcloneRunner:
                 "rclone", "lsd", remote_path, "--max-depth=1",
                 f"--config={rclone_conf}"
             ]
+            
+            # Add --fast-list if enabled
+            if self.rclone_config.get("fast_list"):
+                base_cmd.append("--fast-list")
             logger.info("RcloneRunner: listing folders remote='%s' path='%s'", remote_name, path)
             
             result = subprocess.run(

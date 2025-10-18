@@ -64,6 +64,21 @@ class GoogleDriveSetup:
             ```
             """)
             
+            # Check for custom OAuth credentials
+            oauth_config = self.api._make_request("GET", "/oauth/google-drive/oauth-config")
+            has_custom_oauth = False
+            if oauth_config and oauth_config.get("has_custom_oauth"):
+                has_custom_oauth = True
+                st.success("🎉 **Custom OAuth credentials detected!** You'll get better API quotas.")
+                st.markdown("""
+                **With custom OAuth, use this command instead:**
+                ```bash
+                rclone authorize "drive" "YOUR_CLIENT_ID" "YOUR_CLIENT_SECRET"
+                ```
+                """)
+            else:
+                st.info("💡 **Tip:** For better API quotas, consider setting up custom OAuth credentials in the environment variables.")
+            
             # Scope selection
             scope = st.selectbox(
                 "Choose access level:",
@@ -129,14 +144,53 @@ class GoogleDriveSetup:
         
         st.markdown("### 🔧 Advanced Setup")
         
+        with st.expander("🔑 Custom OAuth Setup (Better Quotas)"):
+            st.markdown("""
+            **For Google Workspace admins:** Set up custom OAuth credentials for better API quotas.
+            
+            **Benefits:**
+            - 🚀 Dedicated API quotas (not shared with other rclone users)
+            - 📊 Better performance for high-usage scenarios
+            - 🎛️ Full control over quota management
+            
+            **Setup Steps:**
+            1. Go to [Google Cloud Console](https://console.developers.google.com/)
+            2. Create a new project or select existing
+            3. Enable Google Drive API
+            4. Configure OAuth consent screen (choose "Internal" for Workspace)
+            5. Add scopes: `drive`, `drive.metadata.readonly`, `docs`
+            6. Create OAuth client ID as "Desktop app" type
+            7. Set environment variables:
+               ```bash
+               export GDRIVE_OAUTH_CLIENT_ID="your_client_id"
+               export GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret"
+               ```
+            """)
+            
+            # Show current OAuth status
+            oauth_config = self.api._make_request("GET", "/oauth/google-drive/oauth-config")
+            if oauth_config and oauth_config.get("has_custom_oauth"):
+                st.success("✅ Custom OAuth credentials are configured")
+                if oauth_config.get("client_id"):
+                    st.code(f"Client ID: {oauth_config['client_id']}")
+            else:
+                st.warning("⚠️ No custom OAuth credentials found in environment variables")
+        
         with st.expander("🔄 Reconfigure Existing Setup"):
-            if st.button("🗑️ Remove Current Google Drive Config"):
-                success = self._remove_gdrive_config()
-                if success:
-                    st.success("✅ Google Drive configuration removed")
-                    self._trigger_rerun()
-                else:
-                    st.error("❌ Failed to remove configuration")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔑 Re-authenticate Google Drive", use_container_width=True):
+                    return self._render_reauth_flow()
+            
+            with col2:
+                if st.button("🗑️ Remove Current Google Drive Config", use_container_width=True):
+                    success = self._remove_gdrive_config()
+                    if success:
+                        st.success("✅ Google Drive configuration removed")
+                        self._trigger_rerun()
+                    else:
+                        st.error("❌ Failed to remove configuration")
         
         with st.expander("🧪 Test Current Configuration"):
             if st.button("🔍 Test Google Drive Connection"):
@@ -295,6 +349,115 @@ class GoogleDriveSetup:
             
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _render_reauth_flow(self):
+        """Render the re-authentication flow for Google Drive."""
+        st.markdown("### 🔑 Re-authenticate Google Drive")
+        st.info("This will help you get a fresh OAuth token for Google Drive. Your existing configuration will be updated with the new token.")
+        
+        # Check for custom OAuth credentials
+        oauth_config = self.api._make_request("GET", "/oauth/google-drive/oauth-config")
+        has_custom_oauth = oauth_config and oauth_config.get("has_custom_oauth")
+        
+        # Step 1: Instructions
+        with st.expander("📋 Step 1: Get New OAuth Token", expanded=True):
+            if has_custom_oauth:
+                st.success("🎉 **Custom OAuth detected!** You'll get better API quotas.")
+                st.markdown("""
+                **Run this command on ANY machine with a web browser:**
+                ```bash
+                rclone authorize "drive" "YOUR_CLIENT_ID" "YOUR_CLIENT_SECRET"
+                ```
+                """)
+            else:
+                st.markdown("""
+                **Run this command on ANY machine with a web browser:**
+                ```bash
+                rclone authorize "drive"
+                ```
+                """)
+            
+            st.markdown("""
+            **What happens:**
+            1. 🌐 Your browser opens automatically
+            2. 🔐 Google asks you to sign in and authorize
+            3. 📋 rclone displays a new token (JSON format)
+            """)
+            
+            # Scope selection
+            scope = st.selectbox(
+                "Choose access level:",
+                ["drive.readonly", "drive"],
+                format_func=lambda x: "📖 Read-only (my files only)" if x == "drive.readonly" else "📝 Full access (includes 'shared with me')",
+                help="Choose 'Full access' if you need to sync files shared with you by others"
+            )
+        
+        # Step 2: Token input
+        with st.expander("🔑 Step 2: Paste New Token", expanded=True):
+            st.markdown("""
+            After running the command above, you'll see output like this:
+            ```json
+            {"access_token":"ya29.a0AQQ_BD...","token_type":"Bearer",...}
+            ```
+            
+            **Copy the entire JSON object** and paste it below:
+            """)
+            
+            token_input = st.text_area(
+                "New OAuth Token (JSON):",
+                placeholder='{"access_token":"ya29...","token_type":"Bearer",...}',
+                height=100,
+                help="Paste the complete JSON token from the rclone authorize command"
+            )
+            
+            # Validate token format
+            token_valid = False
+            if token_input.strip():
+                try:
+                    token_data = json.loads(token_input.strip())
+                    if "access_token" in token_data and "token_type" in token_data:
+                        st.success("✅ Token format looks correct!")
+                        token_valid = True
+                    else:
+                        st.error("❌ Token missing required fields (access_token, token_type)")
+                except json.JSONDecodeError:
+                    st.error("❌ Invalid JSON format. Make sure you copied the complete token.")
+            
+            # Re-authenticate button
+            if st.button("🔄 Update Google Drive Authentication", disabled=not token_valid, type="primary"):
+                return self._update_authentication(token_input.strip(), scope)
+        
+        return False
+    
+    def _update_authentication(self, token: str, scope: str) -> bool:
+        """Update Google Drive authentication with new token."""
+        with st.spinner("🔄 Updating Google Drive authentication..."):
+            try:
+                # Call the backend API to update rclone config
+                result = self._create_rclone_config(token, scope)
+                
+                if result["success"]:
+                    st.success("✅ Google Drive authentication updated successfully!")
+                    
+                    # Test the connection
+                    test_result = self._test_connection()
+                    if test_result["success"]:
+                        st.success("✅ Connection test passed!")
+                        if test_result.get("folders"):
+                            st.write("**Your Google Drive folders:**")
+                            for folder in test_result["folders"][:5]:
+                                st.write(f"📁 {folder}")
+                        return True
+                    else:
+                        st.warning("⚠️ Authentication updated but connection test failed")
+                        st.error(f"Error: {test_result.get('error', 'Unknown error')}")
+                else:
+                    st.error(f"❌ Authentication update failed: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                st.error(f"❌ Update error: {str(e)}")
+        
+        return False
 
     @staticmethod
     def _trigger_rerun() -> None:

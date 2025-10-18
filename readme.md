@@ -112,6 +112,51 @@ sudo -u mascloner rclone config create gdrive drive \
 sudo -u mascloner rclone lsd gdrive:
 ```
 
+##### 🚀 Custom OAuth Setup (Better Quotas)
+
+For Google Workspace admins, using custom OAuth credentials provides dedicated API quotas instead of shared rclone defaults:
+
+**Benefits:**
+- 🎯 **Dedicated API quotas** (not shared with other rclone users)
+- 📈 **Better performance** for high-usage scenarios  
+- 🎛️ **Full control** over quota management and monitoring
+
+**Setup Steps:**
+
+1. **Create Google Cloud Project:**
+   - Go to [Google Cloud Console](https://console.developers.google.com/)
+   - Create new project or select existing
+   - Enable Google Drive API
+
+2. **Configure OAuth Consent Screen:**
+   - Choose "Internal" (for Google Workspace)
+   - Add required scopes: `drive`, `drive.metadata.readonly`, `docs`
+   - Set developer contact information
+
+3. **Create OAuth Credentials:**
+   - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
+   - Choose "Desktop app" as application type
+   - Copy the Client ID and Client Secret
+
+4. **Set Environment Variables:**
+   ```bash
+   # Add to /srv/mascloner/.env
+   GDRIVE_OAUTH_CLIENT_ID="your_client_id_here"
+   GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret_here"
+   
+   # Restart services
+   sudo systemctl restart mascloner-api mascloner-scheduler
+   ```
+
+5. **Use Custom OAuth:**
+   ```bash
+   # The setup wizard will automatically detect and use custom credentials
+   # Or manually authorize with custom credentials:
+   rclone authorize "drive" "your_client_id" "your_client_secret"
+   ```
+
+**Security Note:** Credentials are automatically encrypted using the system's Fernet key and stored securely.
+
 #### 2. Configure Nextcloud
 
 Access UI at http://localhost:8501:
@@ -275,7 +320,7 @@ Notes:
 - Drive rate-limits API calls. Many small files will be limited to ~2 files/sec overall by Google. Larger files can transfer at high throughput.
 - Using your own Drive client_id increases quota and reduces global throttling. See rclone docs for drive client_id setup.
 - We skip Google Drive shortcuts by default to avoid error-prone shortcut objects.
-- Avoid --fast-list on extremely large trees unless memory headroom is ample; enable via RCLONE_FAST_LIST=1 if listings are a bottleneck and memory permits.
+- **Fast List**: Enable `--fast-list` via `RCLONE_FAST_LIST=1` for faster directory listings on large trees (uses more memory but significantly faster for large directories).
 
 ---
 

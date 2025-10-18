@@ -61,8 +61,14 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
             f"token={request.token}",
         ]
 
-        if request.client_id and request.client_secret:
-            cmd.extend([f"client_id={request.client_id}", f"client_secret={request.client_secret}"])
+        # Get custom OAuth credentials from environment (prioritized over request)
+        oauth_config = config.get_gdrive_oauth_config()
+        client_id = oauth_config.get("client_id") or request.client_id
+        client_secret = oauth_config.get("client_secret") or request.client_secret
+
+        if client_id and client_secret:
+            cmd.extend([f"client_id={client_id}", f"client_secret={client_secret}"])
+            logger.info("Using custom OAuth credentials for Google Drive configuration")
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
 
@@ -84,6 +90,21 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to configure Google Drive: {exc}",
         )
+
+
+@router.get("/oauth-config")
+async def get_google_drive_oauth_config():
+    """Get Google Drive OAuth configuration status."""
+    try:
+        oauth_config = config.get_gdrive_oauth_config()
+        return {
+            "client_id": oauth_config.get("client_id"),
+            "client_secret": "***" if oauth_config.get("client_secret") else None,
+            "has_custom_oauth": bool(oauth_config.get("client_id") and oauth_config.get("client_secret"))
+        }
+    except Exception as exc:
+        logger.error("Failed to get OAuth config: %s", exc)
+        return {"client_id": None, "client_secret": None, "has_custom_oauth": False}
 
 
 @router.get("/status", response_model=GoogleDriveStatusResponse)
@@ -148,8 +169,16 @@ async def test_google_drive_connection():
         base_config = config.get_base_config()
         rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
 
+        # Build rclone command with consistent settings
+        cmd = ["rclone", "--config", rclone_config, "--transfers=4", "--checkers=8", "lsd", "gdrive:"]
+        
+        # Add --fast-list if enabled
+        rclone_config_obj = config.get_rclone_config()
+        if rclone_config_obj.get("fast_list"):
+            cmd.append("--fast-list")
+        
         result = subprocess.run(
-            ["rclone", "--config", rclone_config, "--transfers=4", "--checkers=8", "lsd", "gdrive:"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=30,

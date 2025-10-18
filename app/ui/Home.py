@@ -214,8 +214,10 @@ with col2:
                 st.error("❌ Failed to resume scheduler")
 
 with col3:
-    if st.button("📊 View All Runs", use_container_width=True):
-        st.switch_page("pages/3_Runs_and_Events.py")
+    if st.button("🔑 Re-auth Google Drive", use_container_width=True):
+        st.switch_page("pages/4_Setup_Wizard.py")
+        # Set session state to trigger re-auth flow
+        st.session_state.gdrive_reauth = True
 
 with col4:
     if st.button("⚙️ Settings", use_container_width=True):

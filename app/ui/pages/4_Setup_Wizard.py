@@ -151,7 +151,7 @@ def render_google_drive_tab():
     gdrive_status = api.get_google_drive_status() or {}
     configured = gdrive_status.get("configured", False)
 
-    if configured and not st.session_state.get("gdrive_reconfigure", False):
+    if configured and not st.session_state.get("gdrive_reconfigure", False) and not st.session_state.get("gdrive_reauth", False):
         st.success("✅ Google Drive is connected")
         col1, col2 = st.columns(2)
         with col1:
@@ -164,12 +164,16 @@ def render_google_drive_tab():
                     st.write(f"📁 {folder}")
 
         st.markdown("---")
-        col_actions = st.columns(3)
+        col_actions = st.columns(4)
         with col_actions[0]:
+            if st.button("🔑 Re-authenticate", key="gdrive_reauth_btn", use_container_width=True, type="primary"):
+                st.session_state.gdrive_reauth = True
+                _rerun()
+        with col_actions[1]:
             if st.button("🔄 Reconfigure", key="gdrive_reconfigure_btn", use_container_width=True):
                 st.session_state.gdrive_reconfigure = True
                 _rerun()
-        with col_actions[1]:
+        with col_actions[2]:
             if st.button("🧪 Test connection", key="gdrive_test_btn", use_container_width=True):
                 with st.spinner("Testing Google Drive..."):
                     result = api.test_google_drive_connection()
@@ -177,7 +181,7 @@ def render_google_drive_tab():
                         st.success("✅ Connection OK")
                     else:
                         st.error(f"❌ Test failed: {result.get('message', 'Unknown error') if result else 'API error'}")
-        with col_actions[2]:
+        with col_actions[3]:
             if st.button("🗑️ Remove remote", key="gdrive_remove_btn", use_container_width=True):
                 with st.spinner("Removing Google Drive config..."):
                     result = api.remove_google_drive_config()
@@ -189,6 +193,17 @@ def render_google_drive_tab():
                         st.error("❌ Failed to remove Google Drive configuration")
         return
 
+    # Handle re-authentication flow
+    if st.session_state.get("gdrive_reauth", False):
+        st.info("🔑 Re-authenticate Google Drive with a fresh OAuth token.")
+        gdrive_setup = GoogleDriveSetup(api)
+        reauth_complete = gdrive_setup._render_reauth_flow()
+        if reauth_complete:
+            st.success("✅ Google Drive re-authenticated successfully!")
+            st.session_state.pop("gdrive_reauth", None)
+            _rerun()
+        return
+    
     st.info("Configure Google Drive access using the simple token flow.")
     gdrive_setup = GoogleDriveSetup(api)
     setup_complete = gdrive_setup.render_setup_instructions()
@@ -327,7 +342,7 @@ st.markdown("---")
 with st.expander("❓ Help & Troubleshooting"):
     st.markdown(
         """
-        - **Google Drive not working**: run `rclone authorize "drive"` again and paste the new token.
+        - **Google Drive not working**: Use the "🔑 Re-authenticate" button above, or run `rclone authorize "drive"` again and paste the new token.
         - **Nextcloud connection fails**: verify your WebDAV URL and app password.
         - **Folders not loading**: ensure the remote names exist in `rclone.conf`.
         - **Need a fresh start?** Use the settings page to reset configuration or database.
