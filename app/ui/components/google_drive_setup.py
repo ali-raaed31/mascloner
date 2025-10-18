@@ -73,28 +73,22 @@ class GoogleDriveSetup:
                 
                 # Get the actual client ID and secret
                 client_id = oauth_config.get("client_id", "")
-                client_secret = oauth_config.get("client_secret", "")
                 
-                if client_id and client_secret:
+                if client_id:
                     st.markdown(f"""
-                    **With custom OAuth configured, you can use the simple command:**
+                    To ensure rclone uses your custom OAuth when authorizing on another machine, either:
+                    1) Pass your Client ID and Secret explicitly:
                     ```bash
+                    rclone authorize "drive" "{client_id}" "<your_client_secret>"
+                    ```
+                    2) Or set environment variables on that machine so rclone picks them up:
+                    ```bash
+                    export RCLONE_DRIVE_CLIENT_ID="{client_id}"
+                    export RCLONE_DRIVE_CLIENT_SECRET="<your_client_secret>"
                     rclone authorize "drive"
                     ```
-                    
-                    **Or explicitly specify credentials:**
-                    ```bash
-                    rclone authorize "drive" "{client_id}" "{client_secret}"
-                    ```
                     """)
-                    
-                    # Show credentials for easy copying
-                    with st.expander("📋 Copy Credentials", expanded=False):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.text_input("Client ID:", value=client_id, disabled=True, key="setup_client_id", help="Copy this to use in the command above")
-                        with col2:
-                            st.text_input("Client Secret:", value=client_secret, disabled=True, key="setup_client_secret", help="Copy this to use in the command above")
+                    st.info("For security, the Client Secret is stored encrypted and isn't displayed here.")
                 else:
                     st.warning("⚠️ Custom OAuth credentials not found in environment variables")
                     st.markdown("""
@@ -124,7 +118,7 @@ class GoogleDriveSetup:
             
             st.code('rclone authorize "drive"')
             
-            st.info("ℹ️ **Note:** The scope will be configured automatically when you paste the token below.")
+            st.info("ℹ️ **Note:** The scope associated with your token is controlled during the authorization. This UI will record your chosen preference in rclone, but the token's scope is ultimately what Drive honors.")
         
         # Step 2: Token input
         with st.expander("🔑 Step 2: Paste Your Token", expanded=True):
@@ -186,12 +180,8 @@ class GoogleDriveSetup:
             3. Enable Google Drive API
             4. Configure OAuth consent screen (choose "Internal" for Workspace)
             5. Add scopes: `drive`, `drive.metadata.readonly`, `docs`
-            6. Create OAuth client ID as "Desktop app" type
-            7. Set environment variables:
-               ```bash
-               export GDRIVE_OAUTH_CLIENT_ID="your_client_id"
-               export GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret"
-               ```
+                6. Create OAuth client ID as "Desktop app" type
+                7. Save credentials securely in MasCloner (below). When running `rclone authorize` on another machine, either pass them explicitly or use env vars `RCLONE_DRIVE_CLIENT_ID` and `RCLONE_DRIVE_CLIENT_SECRET` on that machine.
             """)
             
             # Show current OAuth status
@@ -200,19 +190,15 @@ class GoogleDriveSetup:
                 st.success("✅ Custom OAuth credentials are configured")
                 
                 client_id = oauth_config.get("client_id", "")
-                client_secret = oauth_config.get("client_secret", "")
                 
-                if client_id and client_secret:
+                if client_id:
                     st.markdown("**Current credentials:**")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.text_input("Client ID:", value=client_id, disabled=True, key="advanced_client_id")
-                    with col2:
-                        st.text_input("Client Secret:", value=client_secret, disabled=True, key="advanced_client_secret")
+                    st.text_input("Client ID:", value=client_id, disabled=True, key="advanced_client_id")
+                    st.caption("Client Secret is stored encrypted and not displayed.")
                     
                     st.markdown("**Use these credentials with rclone:**")
-                    st.code(f'rclone authorize "drive"')
-                    st.info("💡 **Tip:** Since credentials are in environment variables, rclone will use them automatically. You can also explicitly specify them if needed.")
+                    st.code('rclone authorize "drive" "<client_id>" "<client_secret>"')
+                    st.info("💡 **Tip:** Alternatively set RCLONE_DRIVE_CLIENT_ID and RCLONE_DRIVE_CLIENT_SECRET on the machine where you run `rclone authorize`.")
                 else:
                     st.warning("⚠️ Custom OAuth credentials not properly configured")
             else:
@@ -408,24 +394,17 @@ class GoogleDriveSetup:
                 
                 # Get the actual client ID and secret
                 client_id = oauth_config.get("client_id", "")
-                client_secret = oauth_config.get("client_secret", "")
                 
-                if client_id and client_secret:
+                if client_id:
                     st.markdown(f"""
                     **Run this command on ANY machine with a web browser:**
                     ```bash
-                    rclone authorize "drive"
+                    rclone authorize "drive" "{client_id}" "<your_client_secret>"
                     ```
-                    
-                    **Note:** Since OAuth credentials are configured in environment variables, rclone will automatically use them.
+                    If you prefer environment variables, set `RCLONE_DRIVE_CLIENT_ID` and `RCLONE_DRIVE_CLIENT_SECRET` on that machine, then run `rclone authorize "drive"`.
                     """)
-                    
-                    # Also show the credentials for easy copying
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.text_input("Client ID:", value=client_id, disabled=True, help="Copy this to use in the command above")
-                    with col2:
-                        st.text_input("Client Secret:", value=client_secret, disabled=True, help="Copy this to use in the command above")
+                    st.text_input("Client ID:", value=client_id, disabled=True, help="Copy this to use in the command above")
+                    st.caption("Client Secret is stored encrypted and not displayed.")
                 else:
                     st.warning("⚠️ Custom OAuth credentials not found in environment variables")
                     st.markdown("""

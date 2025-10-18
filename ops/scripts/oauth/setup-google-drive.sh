@@ -98,21 +98,17 @@ EOF
 
     if [[ -n "$custom_client_id" && -n "$custom_client_secret" ]]; then
         cat <<EOF
-${GREEN}rclone authorize "drive"${NC}
+${GREEN}rclone authorize "drive" "$custom_client_id" "<your_client_secret>"${NC}
 
 ${BLUE}Custom OAuth detected! This will use your dedicated API quotas.${NC}
-${YELLOW}Since OAuth credentials are set in environment variables, rclone will use them automatically.${NC}
-
-${YELLOW}Your credentials:${NC}
-${BLUE}Client ID:${NC} $custom_client_id
-${BLUE}Client Secret:${NC} $custom_client_secret
-
-${YELLOW}Alternative (explicit credentials):${NC}
-${GREEN}rclone authorize "drive" "$custom_client_id" "$custom_client_secret"${NC}
+${YELLOW}Alternatively, set env vars on the machine where you run authorize:${NC}
+export RCLONE_DRIVE_CLIENT_ID="$custom_client_id"
+export RCLONE_DRIVE_CLIENT_SECRET="<your_client_secret>"
+rclone authorize "drive"
 EOF
     else
         cat <<EOF
-${GREEN}rclone authorize "drive" "scope=drive.readonly"${NC}
+${GREEN}rclone authorize "drive"${NC}
 
 ${BLUE}Using default rclone OAuth (shared quotas). For better performance, consider setting up custom OAuth credentials.${NC}
 
@@ -210,7 +206,6 @@ create_rclone_config() {
     
     # Create the configuration using rclone config create
     if sudo -u "$MASCLONER_USER" rclone --config "$RCLONE_CONFIG" config create gdrive drive \
-        scope="drive.readonly" \
         token="$token"; then
         success "Google Drive configuration created"
     else

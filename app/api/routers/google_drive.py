@@ -7,6 +7,13 @@ import logging
 import subprocess
 
 from fastapi import APIRouter, HTTPException, status
+from pathlib import Path
+import os
+try:
+    from dotenv import load_dotenv
+except Exception:  # optional dependency in some test envs
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        return False
 
 from ..config import config
 from ..schemas import (
@@ -75,7 +82,28 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
 
         if result.returncode == 0:
             logger.info("Google Drive configured successfully via OAuth.")
-            return ApiResponse(success=True, message="Google Drive configured successfully")
+            # Ensure rclone.conf has strict permissions
+            try:
+                Path(rclone_config).parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(rclone_config, 0o600)
+            except Exception as perm_exc:
+                logger.warning("Failed to set permissions on rclone config: %s", perm_exc)
+
+            # Warn if token lacks refresh_token (might stop working soon)
+            warnings = []
+            if "refresh_token" not in token_data:
+                warn_msg = (
+                    "Token has no refresh_token; access may expire soon. "
+                    "Consider re-authorizing via rclone config with offline access or publish your OAuth app."
+                )
+                logger.warning(warn_msg)
+                warnings.append(warn_msg)
+
+            return ApiResponse(
+                success=True,
+                message="Google Drive configured successfully",
+                data={"warnings": warnings} if warnings else None,
+            )
 
         logger.error("Google Drive configuration failed: %s", result.stderr)
         raise HTTPException(
@@ -187,6 +215,12 @@ async def save_google_drive_oauth_config(request: GoogleDriveOAuthConfigRequest)
             import os
             os.chmod(env_file_path, 0o600)
             logger.info("Successfully updated .env file with OAuth credentials")
+            # Hot-reload .env so the running process sees the new values
+            try:
+                load_dotenv(str(env_file_path), override=True)
+                logger.info("Reloaded .env into process environment")
+            except Exception as le:
+                logger.warning("Failed to reload .env: %s", le)
         except Exception as e:
             logger.error(f"Failed to write .env file: {e}")
             raise HTTPException(
@@ -226,6 +260,22 @@ async def get_google_drive_status():
 
         if configured:
             try:
+                # Read actual scope from rclone config dump if available
+                try:
+                    dump = subprocess.run(
+                        ["rclone", "--config", rclone_config, "config", "dump"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if dump.returncode == 0:
+                        cfg = json.loads(dump.stdout)
+                        gdrive_cfg = cfg.get("gdrive") or cfg.get("gdrive:")
+                        if isinstance(gdrive_cfg, dict):
+                            response_data["scope"] = gdrive_cfg.get("scope")
+                except Exception as dump_exc:
+                    logger.debug("Failed to read scope from config dump: %s", dump_exc)
+
                 folder_result = subprocess.run(
                     [
                         "rclone",
@@ -251,7 +301,6 @@ async def get_google_drive_status():
                                 folders.append(folder_name)
 
                     response_data["folders"] = folders[:10]
-                    response_data["scope"] = "drive.readonly"
             except subprocess.TimeoutExpired:
                 logger.warning("Google Drive folder listing timeout")
 
