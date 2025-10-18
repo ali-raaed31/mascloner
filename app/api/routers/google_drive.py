@@ -78,7 +78,14 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
             cmd.extend([f"client_id={client_id}", f"client_secret={client_secret}"])
             logger.info("Using custom OAuth credentials for Google Drive configuration")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired as texc:
+            logger.error("rclone config create timed out: %s", texc)
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Timed out configuring Google Drive via rclone. Please retry; check network connectivity if it persists.",
+            )
 
         if result.returncode == 0:
             logger.info("Google Drive configured successfully via OAuth.")
