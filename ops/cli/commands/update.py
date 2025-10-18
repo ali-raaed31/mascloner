@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.request import ProxyHandler, Request, build_opener
 
 import typer
 from rich.live import Live
@@ -36,7 +37,6 @@ from ops.cli.ui.tables import (
     create_service_status_table,
 )
 from ops.cli.utils import (
-    check_http_endpoint,
     check_systemd_service,
     compare_directories,
     create_backup,
@@ -45,7 +45,6 @@ from ops.cli.utils import (
     get_git_repo,
     get_install_dir,
     get_mascloner_user,
-    get_service_logs,
     install_cli_dependencies,
     require_root,
     run_command,
@@ -736,104 +735,72 @@ def update_systemd_services(
     return True
 
 
+def _check_endpoint_with_retry(
+    name: str,
+    url: str,
+    *,
+    timeout: int = 5,
+    attempts: int = 10,
+    delay: float = 3.0,
+    layout: Optional[UpdateLayout] = None,
+) -> Tuple[bool, str]:
+    """Probe an HTTP endpoint with retry logic, bypassing proxies."""
+
+    opener = build_opener(ProxyHandler({}))
+    last_error: Optional[str] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            request = Request(url, method="GET")
+            response = opener.open(request, timeout=timeout)
+            status_code = getattr(response, "status", None)
+            if status_code is None and hasattr(response, "getcode"):
+                status_code = response.getcode()
+            response.close()
+
+            detail = f"{url} (HTTP {status_code})" if status_code else url
+            if layout:
+                suffix = f" after {attempt} attempt{'s' if attempt > 1 else ''}" if attempt > 1 else ""
+                layout.add_log(f"{name} healthy{suffix}", style="green")
+            return True, detail
+        except Exception as exc:  # pragma: no cover - network timing
+            last_error = str(exc)
+            if layout and attempt < attempts:
+                layout.add_log(
+                    f"{name} check {attempt}/{attempts} failed: {last_error}",
+                    style="yellow",
+                )
+            if attempt < attempts:
+                time.sleep(delay)
+
+    if layout:
+        layout.add_log(
+            f"{name} unhealthy after {attempts} attempts: {last_error or 'no response'}",
+            style="red",
+        )
+    return False, f"{url} ({last_error or 'no response'})"
+
+
 def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, bool, str]]:
-    """Run health checks on services with retry logic."""
-    checks = []
+    """Run post-update health checks using HTTP endpoints only."""
 
-    # Check API service
-    api_running, api_status = check_systemd_service("mascloner-api")
-    checks.append(("API Service", api_running, api_status))
-    if layout:
-        layout.add_log(f"API service: {'✓' if api_running else '✗'}", style="green" if api_running else "red")
+    endpoints: List[Tuple[str, str]] = [
+        ("API Health", "http://127.0.0.1:8787/health"),
+        ("API Status", "http://127.0.0.1:8787/status"),
+        ("UI", "http://127.0.0.1:8501"),
+        ("File Tree", "http://127.0.0.1:8787/tree"),
+    ]
 
-    # Check UI service
-    ui_running, ui_status = check_systemd_service("mascloner-ui")
-    checks.append(("UI Service", ui_running, ui_status))
-    if layout:
-        layout.add_log(f"UI service: {'✓' if ui_running else '✗'}", style="green" if ui_running else "red")
-
-    # Check API endpoint with retry (may take time to initialize after update)
-    api_ok = False
-    api_error = None
-    for attempt in range(3):
-        api_ok = check_http_endpoint("http://127.0.0.1:8787/health", timeout=5)
-        if api_ok:
-            break
-        if layout and attempt < 2:
-            layout.add_log(f"API health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
-        time.sleep(2)
-    
-    # If API health check failed, get detailed diagnostics
-    if not api_ok and layout:
-        layout.add_log("=== API Health Check Failed - Diagnostics ===", style="bold red")
-        
-        # Check if port is listening
-        exit_code, netstat_out, _ = run_command(
-            ["ss", "-tlnp"],
-            check=False,
-            capture=True,
+    checks: List[Tuple[str, bool, str]] = []
+    for name, url in endpoints:
+        ok, detail = _check_endpoint_with_retry(
+            name,
+            url,
+            timeout=5,
+            attempts=10,
+            delay=3.0,
+            layout=layout,
         )
-        if exit_code == 0 and ":8787" in netstat_out:
-            # Extract the line with port 8787
-            for line in netstat_out.split('\n'):
-                if ":8787" in line:
-                    layout.add_log(f"Port 8787 status: {line.strip()[:100]}", style="yellow")
-                    break
-        else:
-            layout.add_log("Port 8787 is NOT listening - API not started", style="red")
-        
-        # Check API service logs
-        logs = get_service_logs("mascloner-api", lines=10)
-        if logs:
-            layout.add_log("Recent API logs:", style="yellow")
-            for log_line in logs[-5:]:  # Last 5 lines
-                layout.add_log(f"  {log_line[:120]}", style="dim")
-        
-        # Try to curl the endpoint for more details
-        exit_code, curl_out, curl_err = run_command(
-            ["curl", "-v", "http://127.0.0.1:8787/health"],
-            check=False,
-            capture=True,
-        )
-        if curl_err:
-            layout.add_log(f"Connection error: {curl_err[:200]}", style="red")
-    
-    checks.append(("API Health", api_ok, "http://127.0.0.1:8787/health"))
-    if layout:
-        layout.add_log(f"API health: {'✓' if api_ok else '✗'}", style="green" if api_ok else "red")
-
-    # Check UI endpoint with retry
-    ui_ok = False
-    for attempt in range(3):
-        ui_ok = check_http_endpoint("http://127.0.0.1:8501", timeout=5)
-        if ui_ok:
-            break
-        if layout and attempt < 2:
-            layout.add_log(f"UI health check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
-        time.sleep(2)
-    
-    checks.append(("UI Endpoint", ui_ok, "http://127.0.0.1:8501"))
-    if layout:
-        layout.add_log(f"UI endpoint: {'✓' if ui_ok else '✗'}", style="green" if ui_ok else "red")
-
-    # Check tunnel service
-    tunnel_running, tunnel_status = check_systemd_service("mascloner-tunnel")
-    checks.append(("Tunnel Service", tunnel_running, tunnel_status))
-    if layout:
-        layout.add_log(f"Tunnel service: {'✓' if tunnel_running else '✗'}", style="green" if tunnel_running else "red")
-
-    # Check file tree endpoint with retry
-    tree_ok = False
-    for attempt in range(3):
-        tree_ok = check_http_endpoint("http://127.0.0.1:8787/tree", timeout=5)
-        if tree_ok:
-            break
-        if layout and attempt < 2:
-            layout.add_log(f"File tree check attempt {attempt + 1}/3 failed, retrying...", style="yellow")
-        time.sleep(2)
-    
-    checks.append(("File Tree", tree_ok, "http://127.0.0.1:8787/tree"))
-    if layout:
-        layout.add_log(f"File tree: {'✓' if tree_ok else '✗'}", style="green" if tree_ok else "red")
+        checks.append((name, ok, detail))
 
     return checks

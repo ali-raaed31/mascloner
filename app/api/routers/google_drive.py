@@ -12,6 +12,7 @@ from ..config import config
 from ..schemas import (
     ApiResponse,
     GoogleDriveOAuthRequest,
+    GoogleDriveOAuthConfigRequest,
     GoogleDriveStatusResponse,
 )
 
@@ -107,12 +108,25 @@ async def get_google_drive_oauth_config():
         return {"client_id": None, "client_secret": None, "has_custom_oauth": False}
 
 
+@router.post("/oauth-config/test")
+async def test_oauth_config_endpoint(request: GoogleDriveOAuthConfigRequest):
+    """Test endpoint for OAuth configuration."""
+    return {
+        "success": True,
+        "message": "OAuth config endpoint is working",
+        "received_client_id": request.client_id[:10] + "...",
+        "received_client_secret": "*" * len(request.client_secret)
+    }
+
+
 @router.post("/oauth-config")
-async def save_google_drive_oauth_config(request: Dict[str, str]):
+async def save_google_drive_oauth_config(request: GoogleDriveOAuthConfigRequest):
     """Save Google Drive OAuth configuration."""
     try:
-        client_id = request.get("client_id", "").strip()
-        client_secret = request.get("client_secret", "").strip()
+        client_id = request.client_id.strip()
+        client_secret = request.client_secret.strip()
+        
+        logger.info(f"Received OAuth config request: client_id={client_id[:10]}..., client_secret={'*' * len(client_secret)}")
         
         if not client_id or not client_secret:
             raise HTTPException(
@@ -128,11 +142,20 @@ async def save_google_drive_oauth_config(request: Dict[str, str]):
         base_config = config.get_base_config()
         env_file_path = base_config["base_dir"] / ".env"
         
+        logger.info(f"Updating .env file at: {env_file_path}")
+        
         # Read current .env file
         env_content = ""
         if env_file_path.exists():
-            with open(env_file_path, 'r') as f:
-                env_content = f.read()
+            try:
+                with open(env_file_path, 'r') as f:
+                    env_content = f.read()
+            except Exception as e:
+                logger.error(f"Failed to read .env file: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to read .env file: {e}"
+                )
         
         # Update or add OAuth variables
         lines = env_content.split('\n')
@@ -156,12 +179,20 @@ async def save_google_drive_oauth_config(request: Dict[str, str]):
             updated_lines.append(f'GDRIVE_OAUTH_CLIENT_SECRET="{encrypted_client_secret}"')
         
         # Write updated .env file
-        with open(env_file_path, 'w') as f:
-            f.write('\n'.join(updated_lines))
-        
-        # Set proper permissions
-        import os
-        os.chmod(env_file_path, 0o600)
+        try:
+            with open(env_file_path, 'w') as f:
+                f.write('\n'.join(updated_lines))
+            
+            # Set proper permissions
+            import os
+            os.chmod(env_file_path, 0o600)
+            logger.info("Successfully updated .env file with OAuth credentials")
+        except Exception as e:
+            logger.error(f"Failed to write .env file: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to write .env file: {e}"
+            )
         
         logger.info("Google Drive OAuth credentials saved successfully")
         return {"success": True, "message": "OAuth credentials saved successfully"}

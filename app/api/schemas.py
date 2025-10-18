@@ -114,6 +114,13 @@ class WebDAVTestRequest(BaseModel):
     remote_name: str
 
 
+class GoogleDriveOAuthConfigRequest(BaseModel):
+    """Request model for Google Drive OAuth configuration."""
+
+    client_id: str = Field(..., description="Google OAuth Client ID")
+    client_secret: str = Field(..., description="Google OAuth Client Secret")
+
+
 try:  # Pydantic v2
     TreeNodeResponse.model_rebuild()
 except AttributeError:  # Pydantic v1 fallback
