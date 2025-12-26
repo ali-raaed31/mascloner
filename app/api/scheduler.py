@@ -1,10 +1,13 @@
 """APScheduler integration for MasCloner sync jobs."""
 
+from __future__ import annotations
+
 import logging
+import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -108,13 +111,12 @@ class SyncScheduler:
         """Trigger an immediate sync run."""
         try:
             # Run sync job in a separate thread to avoid blocking
-            import threading
             sync_thread = threading.Thread(target=sync_job, daemon=True)
             sync_thread.start()
             logger.info("Manual sync triggered")
             return True
         except Exception as e:
-            logger.error(f"Failed to trigger manual sync: {e}")
+            logger.error("Failed to trigger manual sync: %s", e)
             return False
 
 
@@ -195,7 +197,7 @@ def sync_job() -> None:
         # Create run record
         log_dir = get_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_filename = f"sync-{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+        log_filename = f"sync-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
         log_path = log_dir / log_filename
         
         run = Run(
@@ -224,11 +226,10 @@ def sync_job() -> None:
         run.num_updated = result.num_updated
         run.bytes_transferred = result.bytes_transferred
         run.errors = result.errors
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc)
         
         # Add file events unless lightweight mode is enabled
-        from os import getenv
-        lightweight_events = getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
+        lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
         if not lightweight_events:
             for event in result.events:
                 file_event = FileEvent(
@@ -256,12 +257,12 @@ def sync_job() -> None:
         if run and db:
             try:
                 run.status = "error"
-                run.finished_at = datetime.utcnow()
+                run.finished_at = datetime.now(timezone.utc)
                 
                 # Add error event
                 error_event = FileEvent(
                     run_id=run.id,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     action="error",
                     file_path="",
                     file_size=0,

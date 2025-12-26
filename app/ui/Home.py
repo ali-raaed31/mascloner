@@ -4,10 +4,15 @@ MasCloner Streamlit Web UI
 Main entry point for the web interface.
 """
 
-import streamlit as st
-from typing import Dict, Any, Optional
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any, Dict, Optional
+
+import streamlit as st
+
 from api_client import APIClient
+from components.auth import is_auth_required, render_login_form, render_logout_button, require_auth
 
 # Configure Streamlit page
 st.set_page_config(
@@ -16,22 +21,30 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        'Get Help': None,
-        'Report a bug': None,
-        'About': "MasCloner - Automated Google Drive to Nextcloud sync"
-    }
+        "Get Help": None,
+        "Report a bug": None,
+        "About": "MasCloner - Automated Google Drive to Nextcloud sync",
+    },
 )
+
 
 # Initialize API client
 @st.cache_resource
 def get_api_client():
     return APIClient()
 
+
 api = get_api_client()
+
+# Check authentication first
+if not require_auth(api):
+    st.stop()
 
 # Sidebar Navigation
 st.sidebar.title("🔄 MasCloner")
+render_logout_button()
 st.sidebar.markdown("---")
+
 
 # Check API connection
 def check_api_connection():
@@ -46,13 +59,16 @@ def check_api_connection():
         st.sidebar.code("python -m app.api.main")
         return False
 
+
 # Display connection status
 api_connected = check_api_connection()
 
 # Main content
 st.title("🏠 MasCloner Home")
 st.markdown("**One-way sync from Google Drive to Nextcloud**")
-st.markdown("Welcome to MasCloner! Monitor your sync status and manage your automated file synchronization.")
+st.markdown(
+    "Welcome to MasCloner! Monitor your sync status and manage your automated file synchronization."
+)
 
 if not api_connected:
     st.error("Cannot connect to MasCloner API. Please start the API server.")
@@ -63,15 +79,15 @@ if not api_connected:
 status = api.get_status()
 if status:
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         scheduler_running = status.get("scheduler_running", False)
         st.metric(
             "🔄 Scheduler",
             "🟢 Running" if scheduler_running else "🔴 Stopped",
-            delta="Active" if scheduler_running else "Inactive"
+            delta="Active" if scheduler_running else "Inactive",
         )
-    
+
     with col2:
         remotes = status.get("remotes_configured", {})
         gdrive_ok = remotes.get("gdrive", False)
@@ -79,38 +95,42 @@ if status:
         both_ok = gdrive_ok and nextcloud_ok
         st.metric(
             "🔗 Remotes",
-            "🟢 Connected" if both_ok else "🟡 Partial" if (gdrive_ok or nextcloud_ok) else "🔴 Disconnected",
-            delta=f"GDrive: {'✓' if gdrive_ok else '✗'} | Nextcloud: {'✓' if nextcloud_ok else '✗'}"
+            "🟢 Connected"
+            if both_ok
+            else "🟡 Partial"
+            if (gdrive_ok or nextcloud_ok)
+            else "🔴 Disconnected",
+            delta=f"GDrive: {'✓' if gdrive_ok else '✗'} | Nextcloud: {'✓' if nextcloud_ok else '✗'}",
         )
-    
+
     with col3:
         last_sync = status.get("last_sync")
         if last_sync:
             try:
-                dt = datetime.fromisoformat(last_sync.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
                 last_sync_str = dt.strftime("%m/%d %H:%M")
                 time_ago = datetime.now() - dt.replace(tzinfo=None)
                 if time_ago.days > 0:
                     delta_str = f"{time_ago.days}d ago"
                 elif time_ago.seconds > 3600:
-                    delta_str = f"{time_ago.seconds//3600}h ago"
+                    delta_str = f"{time_ago.seconds // 3600}h ago"
                 else:
-                    delta_str = f"{time_ago.seconds//60}m ago"
-            except:
+                    delta_str = f"{time_ago.seconds // 60}m ago"
+            except Exception:
                 last_sync_str = "Unknown"
                 delta_str = "Error"
         else:
             last_sync_str = "Never"
             delta_str = "No syncs yet"
         st.metric("📅 Last Sync", last_sync_str, delta=delta_str)
-    
+
     with col4:
         total_runs = status.get("total_runs", 0)
         config_valid = status.get("config_valid", False)
         st.metric(
-            "📈 Total Runs", 
+            "📈 Total Runs",
             str(total_runs),
-            delta="✓ Config OK" if config_valid else "⚠️ Config Issue"
+            delta="✓ Config OK" if config_valid else "⚠️ Config Issue",
         )
 
 st.markdown("---")
@@ -125,46 +145,45 @@ if runs and len(runs) > 0:
         run_id = run.get("id", "Unknown")
         run_status = run.get("status", "unknown")
         start_time = run.get("started_at", "Unknown")
-        
+
         # Status icon and color
         if run_status == "success":
             status_icon = "✅"
-            status_color = "green"
         elif run_status == "running":
             status_icon = "🔄"
-            status_color = "blue"
         elif run_status == "failed":
             status_icon = "❌"
-            status_color = "red"
         else:
             status_icon = "❓"
-            status_color = "gray"
-        
+
         # Format timestamp
         try:
             if start_time != "Unknown":
-                dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
                 time_str = dt.strftime("%m/%d %H:%M:%S")
             else:
                 time_str = "Unknown time"
-        except:
+        except Exception:
             time_str = start_time
-        
+
         # Run summary
         files_added = run.get("num_added", 0)
         files_updated = run.get("num_updated", 0)
         bytes_transferred = run.get("bytes_transferred", 0)
         error_count = run.get("errors", 0)
-        
+
         # Format file size
-        if bytes_transferred > 1024*1024:
-            size_str = f"{bytes_transferred/1024/1024:.1f} MB"
+        if bytes_transferred > 1024 * 1024:
+            size_str = f"{bytes_transferred / 1024 / 1024:.1f} MB"
         elif bytes_transferred > 1024:
-            size_str = f"{bytes_transferred/1024:.1f} KB"
+            size_str = f"{bytes_transferred / 1024:.1f} KB"
         else:
             size_str = f"{bytes_transferred} B"
-        
-        with st.expander(f"{status_icon} Run #{run_id} - {time_str} - {run_status.title()}", expanded=False):
+
+        with st.expander(
+            f"{status_icon} Run #{run_id} - {time_str} - {run_status.title()}",
+            expanded=False,
+        ):
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Files Added", files_added)
@@ -175,7 +194,10 @@ if runs and len(runs) > 0:
             with col4:
                 st.metric("Errors", error_count, delta="⚠️" if error_count > 0 else "✅")
 else:
-    st.info("🌟 No sync runs yet. Your first automatic sync will start soon, or you can trigger one manually below.")
+    st.info(
+        "🌟 No sync runs yet. Your first automatic sync will start soon, "
+        "or you can trigger one manually below."
+    )
 
 st.markdown("---")
 
@@ -227,17 +249,19 @@ with col4:
 st.markdown("---")
 
 with st.expander("📖 Navigation Guide"):
-    st.markdown("""
+    st.markdown(
+        """
     **🏠 Home** - System overview and quick actions (this page)
-    
+
     **⚙️ Settings** - Configure schedules, test connections, and manage system settings
-    
+
     **📋 History** - View detailed sync run history and file events
-    
+
     **🔧 Setup Wizard** - Initial configuration for Google Drive and Nextcloud
-    
+
     **🌳 File Tree** - Explore synced files with status indicators
-    """)
+    """
+    )
 
 # Footer
 st.markdown("---")

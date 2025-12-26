@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import configparser
 import json
 import logging
 import os
-import subprocess
 import tempfile
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pathlib import Path
+
 try:
     from dotenv import load_dotenv
 except Exception:  # optional dependency in some test envs
+
     def load_dotenv(*args, **kwargs):  # type: ignore
         return False
+
 
 from ..config import config
 from ..schemas import (
     ApiResponse,
-    GoogleDriveOAuthRequest,
     GoogleDriveOAuthConfigRequest,
+    GoogleDriveOAuthRequest,
     GoogleDriveStatusResponse,
 )
 
@@ -309,61 +312,86 @@ async def get_google_drive_status():
         base_config = config.get_base_config()
         rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
 
-        result = subprocess.run(
-            ["rclone", "--config", rclone_config, "listremotes"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        # Check if gdrive remote is configured
+        process = await asyncio.create_subprocess_exec(
+            "rclone",
+            "--config",
+            rclone_config,
+            "listremotes",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        configured = result.returncode == 0 and "gdrive:" in result.stdout
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return GoogleDriveStatusResponse(configured=False)
+
+        configured = process.returncode == 0 and "gdrive:" in stdout.decode()
         response_data = {"configured": configured, "remote_name": "gdrive"}
 
         if configured:
             try:
                 # Read actual scope from rclone config dump if available
                 try:
-                    dump = subprocess.run(
-                        ["rclone", "--config", rclone_config, "config", "dump"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    if dump.returncode == 0:
-                        cfg = json.loads(dump.stdout)
-                        gdrive_cfg = cfg.get("gdrive") or cfg.get("gdrive:")
-                        if isinstance(gdrive_cfg, dict):
-                            response_data["scope"] = gdrive_cfg.get("scope")
-                except Exception as dump_exc:
-                    logger.debug("Failed to read scope from config dump: %s", dump_exc)
-
-                folder_result = subprocess.run(
-                    [
+                    dump_process = await asyncio.create_subprocess_exec(
                         "rclone",
                         "--config",
                         rclone_config,
-                        "--transfers=2",
-                        "--checkers=2",
-                        "lsd",
-                        "gdrive:",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
+                        "config",
+                        "dump",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    try:
+                        dump_stdout, _ = await asyncio.wait_for(
+                            dump_process.communicate(), timeout=10
+                        )
+                        if dump_process.returncode == 0:
+                            cfg = json.loads(dump_stdout.decode())
+                            gdrive_cfg = cfg.get("gdrive") or cfg.get("gdrive:")
+                            if isinstance(gdrive_cfg, dict):
+                                response_data["scope"] = gdrive_cfg.get("scope")
+                    except asyncio.TimeoutError:
+                        dump_process.kill()
+                        await dump_process.wait()
+                except Exception as dump_exc:
+                    logger.debug("Failed to read scope from config dump: %s", dump_exc)
+
+                # List folders
+                folder_process = await asyncio.create_subprocess_exec(
+                    "rclone",
+                    "--config",
+                    rclone_config,
+                    "--transfers=2",
+                    "--checkers=2",
+                    "lsd",
+                    "gdrive:",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
 
-                if folder_result.returncode == 0:
-                    folders = []
-                    for line in folder_result.stdout.strip().split("\n"):
-                        if line.strip():
-                            parts = line.strip().split()
-                            if len(parts) >= 5:
-                                folder_name = " ".join(parts[4:])
-                                folders.append(folder_name)
-
-                    response_data["folders"] = folders[:10]
-            except subprocess.TimeoutExpired:
-                logger.warning("Google Drive folder listing timeout")
+                try:
+                    folder_stdout, _ = await asyncio.wait_for(
+                        folder_process.communicate(), timeout=15
+                    )
+                    if folder_process.returncode == 0:
+                        folders = []
+                        for line in folder_stdout.decode().strip().split("\n"):
+                            if line.strip():
+                                parts = line.strip().split()
+                                if len(parts) >= 5:
+                                    folder_name = " ".join(parts[4:])
+                                    folders.append(folder_name)
+                        response_data["folders"] = folders[:10]
+                except asyncio.TimeoutError:
+                    folder_process.kill()
+                    await folder_process.wait()
+                    logger.warning("Google Drive folder listing timeout")
+            except Exception as inner_exc:
+                logger.warning("Error getting folder list: %s", inner_exc)
 
         return GoogleDriveStatusResponse(**response_data)
 
@@ -380,23 +408,37 @@ async def test_google_drive_connection():
         rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
 
         # Build rclone command with consistent settings
-        cmd = ["rclone", "--config", rclone_config, "--transfers=4", "--checkers=8", "lsd", "gdrive:"]
-        
+        cmd = [
+            "rclone",
+            "--config",
+            rclone_config,
+            "--transfers=4",
+            "--checkers=8",
+            "lsd",
+            "gdrive:",
+        ]
+
         # Add --fast-list if enabled
         rclone_config_obj = config.get_rclone_config()
         if rclone_config_obj.get("fast_list"):
             cmd.append("--fast-list")
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        if result.returncode == 0:
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return ApiResponse(success=False, message="Connection test timeout")
+
+        if process.returncode == 0:
             folders = []
-            for line in result.stdout.strip().split("\n"):
+            for line in stdout.decode().strip().split("\n"):
                 if line.strip():
                     parts = line.strip().split()
                     if len(parts) >= 5:
@@ -411,11 +453,9 @@ async def test_google_drive_connection():
 
         return ApiResponse(
             success=False,
-            message=f"Connection failed: {result.stderr or 'Unknown error'}",
+            message=f"Connection failed: {stderr.decode() or 'Unknown error'}",
         )
 
-    except subprocess.TimeoutExpired:
-        return ApiResponse(success=False, message="Connection test timeout")
     except Exception as exc:  # pragma: no cover
         logger.error("Google Drive connection test error: %s", exc)
         return ApiResponse(success=False, message=f"Test error: {exc}")

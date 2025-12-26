@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from ..dependencies import get_runner
 from ..rclone_runner import RcloneRunner
 from ..schemas import ApiResponse, WebDAVTestRequest
 
@@ -15,11 +16,13 @@ router = APIRouter(prefix="/test/nextcloud", tags=["nextcloud"])
 
 
 @router.post("/webdav", response_model=ApiResponse)
-async def test_nextcloud_webdav(request: WebDAVTestRequest):
+async def test_nextcloud_webdav(
+    request: WebDAVTestRequest,
+    runner: RcloneRunner = Depends(get_runner),
+):
     """Test Nextcloud WebDAV connection and create rclone remote."""
     try:
-        runner = RcloneRunner()
-        test_result = runner.test_webdav_connection(
+        test_result = await runner.test_webdav_connection_async(
             url=request.url,
             user=request.user,
             password=request.pass_,
