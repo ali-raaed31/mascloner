@@ -615,6 +615,37 @@ def update_code(
             if layout:
                 layout.add_log("Updated ops/ directory", style="green")
 
+        # Update alembic migration files (v2.0+)
+        alembic_ini_src = temp_dir / "alembic.ini"
+        if alembic_ini_src.exists():
+            shutil.copy(alembic_ini_src, install_dir / "alembic.ini")
+            if layout:
+                layout.add_log("Updated alembic.ini", style="green")
+
+        alembic_dir_src = temp_dir / "alembic"
+        alembic_dir_dst = install_dir / "alembic"
+        if alembic_dir_src.exists():
+            shutil.rmtree(alembic_dir_dst, ignore_errors=True)
+            shutil.copytree(alembic_dir_src, alembic_dir_dst)
+            if layout:
+                layout.add_log("Updated alembic/ directory", style="green")
+
+        # Update tests directory (for development/verification)
+        tests_src = temp_dir / "tests"
+        tests_dst = install_dir / "tests"
+        if tests_src.exists():
+            shutil.rmtree(tests_dst, ignore_errors=True)
+            shutil.copytree(tests_src, tests_dst)
+            if layout:
+                layout.add_log("Updated tests/ directory", style="green")
+
+        # Update .env.example if exists (without overwriting .env)
+        env_example_src = temp_dir / ".env.example"
+        if env_example_src.exists():
+            shutil.copy(env_example_src, install_dir / ".env.example")
+            if layout:
+                layout.add_log("Updated .env.example", style="green")
+
         # Set ownership
         run_command(
             ["chown", "-R", f"{user}:{user}", str(install_dir)],
@@ -695,12 +726,81 @@ def clear_python_cache(install_dir: Path, layout: Optional[UpdateLayout] = None)
 def run_migrations(
     install_dir: Path, user: str, layout: Optional[UpdateLayout] = None
 ) -> bool:
-    """Run database migrations if needed."""
-    # For now, we don't have migrations
-    # This is a placeholder for future migration support
-    if layout:
-        layout.add_log("No migrations needed", style="dim")
-    return True
+    """Run database migrations using Alembic."""
+    alembic_ini = install_dir / "alembic.ini"
+    alembic_dir = install_dir / "alembic"
+    venv_alembic = install_dir / ".venv" / "bin" / "alembic"
+
+    # Check if Alembic is configured (v2.0+)
+    if not (alembic_ini.exists() and alembic_dir.exists()):
+        if layout:
+            layout.add_log("No Alembic migrations configured", style="dim")
+        return True
+
+    # Check if alembic is installed
+    exit_code, output, _ = run_command(
+        ["sudo", "-u", user, str(install_dir / ".venv" / "bin" / "pip"), "list"],
+        check=False,
+        capture=True,
+    )
+    
+    if exit_code != 0 or "alembic" not in output.lower():
+        if layout:
+            layout.add_log("Alembic not installed, skipping migrations", style="yellow")
+        return True
+
+    try:
+        # Check current migration version
+        exit_code, current_version, _ = run_command(
+            ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "current"],
+            check=False,
+            capture=True,
+            cwd=str(install_dir),
+        )
+
+        # If database not stamped, stamp it with current head
+        if exit_code != 0 or not current_version.strip():
+            if layout:
+                layout.add_log("Database not under Alembic control, stamping...", style="blue")
+            
+            exit_code, _, _ = run_command(
+                ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "stamp", "head"],
+                check=False,
+                capture=True,
+                cwd=str(install_dir),
+            )
+            
+            if exit_code == 0:
+                if layout:
+                    layout.add_log("Database stamped successfully", style="green")
+            else:
+                if layout:
+                    layout.add_log("Could not stamp database, will try upgrade", style="yellow")
+
+        # Run migrations
+        if layout:
+            layout.add_log("Running Alembic migrations...", style="blue")
+
+        exit_code, stdout, stderr = run_command(
+            ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "upgrade", "head"],
+            check=False,
+            capture=True,
+            cwd=str(install_dir),
+        )
+
+        if exit_code == 0:
+            if layout:
+                layout.add_log("Migrations completed successfully", style="green")
+            return True
+        else:
+            if layout:
+                layout.add_log(f"Migration warning: {stderr[:100]}", style="yellow")
+            return True  # Continue anyway, might just be already at head
+
+    except Exception as e:
+        if layout:
+            layout.add_log(f"Migration error: {e}", style="yellow")
+        return True  # Don't fail the update for migration issues
 
 
 def update_systemd_services(

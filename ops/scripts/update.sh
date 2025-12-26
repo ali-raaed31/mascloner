@@ -262,6 +262,31 @@ update_code() {
     [[ -f "$temp_dir/SECURITY.md" ]] && cp "$temp_dir/SECURITY.md" "$INSTALL_DIR/"
     [[ -d "$temp_dir/.docs" ]] && cp -r "$temp_dir/.docs" "$INSTALL_DIR/"
     
+    # Copy Alembic migration files (v2.0+)
+    if [[ -f "$temp_dir/alembic.ini" ]]; then
+        cp "$temp_dir/alembic.ini" "$INSTALL_DIR/"
+        echo_info "Copied alembic.ini"
+    fi
+    if [[ -d "$temp_dir/alembic" ]]; then
+        # Remove old alembic directory if exists to ensure clean update
+        rm -rf "$INSTALL_DIR/alembic" 2>/dev/null || true
+        cp -r "$temp_dir/alembic" "$INSTALL_DIR/"
+        echo_info "Copied alembic/ migration directory"
+    fi
+    
+    # Copy tests directory (for development/verification)
+    if [[ -d "$temp_dir/tests" ]]; then
+        rm -rf "$INSTALL_DIR/tests" 2>/dev/null || true
+        cp -r "$temp_dir/tests" "$INSTALL_DIR/"
+        echo_info "Copied tests/ directory"
+    fi
+    
+    # Copy .env.example if it exists (without overwriting .env)
+    if [[ -f "$temp_dir/.env.example" ]]; then
+        cp "$temp_dir/.env.example" "$INSTALL_DIR/"
+        echo_info "Copied .env.example"
+    fi
+    
     # Copy any utility scripts
     [[ -f "$temp_dir/setup_dev_env.py" ]] && cp "$temp_dir/setup_dev_env.py" "$INSTALL_DIR/"
     [[ -f "$temp_dir/test_db.py" ]] && cp "$temp_dir/test_db.py" "$INSTALL_DIR/"
@@ -333,14 +358,45 @@ update_dependencies() {
 run_migrations() {
     echo_info "Running database migrations..."
     
-    # Check if migration script exists
-    if [[ -f "$INSTALL_DIR/ops/scripts/migrate.py" ]]; then
+    # Check if Alembic is available and configured (v2.0+)
+    if [[ -f "$INSTALL_DIR/alembic.ini" ]] && [[ -d "$INSTALL_DIR/alembic" ]]; then
+        # Check if alembic is installed
+        if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/pip" list | grep -q alembic; then
+            cd "$INSTALL_DIR"
+            
+            # Check if database is already stamped
+            local current_version
+            current_version=$(sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" current 2>/dev/null | head -1)
+            
+            if [[ -z "$current_version" ]] || [[ "$current_version" == *"database is not under Alembic"* ]]; then
+                # Database exists but not stamped - stamp it with initial migration
+                echo_info "Database not under Alembic control, stamping with initial schema..."
+                if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" stamp head 2>/dev/null; then
+                    echo_success "Database stamped successfully"
+                else
+                    echo_warning "Could not stamp database, will try to upgrade anyway"
+                fi
+            fi
+            
+            # Run migrations
+            echo_info "Running Alembic migrations..."
+            if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" upgrade head; then
+                echo_success "Database migrations completed"
+            else
+                echo_warning "Migration may have failed, but continuing..."
+            fi
+            
+            cd -
+        else
+            echo_warning "Alembic not installed, skipping migrations"
+        fi
+    # Fallback to legacy migration script if exists
+    elif [[ -f "$INSTALL_DIR/ops/scripts/migrate.py" ]]; then
         sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/ops/scripts/migrate.py"
+        echo_success "Legacy migrations completed"
     else
-        echo_info "No migration script found, skipping"
+        echo_info "No migration system found, skipping"
     fi
-    
-    echo_success "Database migrations completed"
 }
 
 update_systemd_services() {
