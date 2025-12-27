@@ -42,7 +42,10 @@ def get_git_repo() -> str:
 
 
 def run_command(
-    cmd: List[str], check: bool = True, capture: bool = True
+    cmd: List[str],
+    check: bool = True,
+    capture: bool = True,
+    cwd: Optional[str] = None,
 ) -> Tuple[int, str, str]:
     """
     Run a shell command and return the result.
@@ -51,6 +54,7 @@ def run_command(
         cmd: Command and arguments as a list
         check: Raise exception on non-zero exit
         capture: Capture stdout/stderr
+        cwd: Working directory for command execution
         
     Returns:
         Tuple of (exit_code, stdout, stderr)
@@ -61,6 +65,7 @@ def run_command(
             capture_output=capture,
             text=True,
             check=check,
+            cwd=cwd,
         )
         return result.returncode, result.stdout or "", result.stderr or ""
     except subprocess.CalledProcessError as e:
