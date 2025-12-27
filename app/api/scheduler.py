@@ -212,13 +212,21 @@ def sync_job() -> None:
         
         # Execute sync
         runner = get_runner()
-        result = runner.run_sync(
-            gdrive_remote=sync_config["gdrive_remote"],
-            gdrive_src=sync_config["gdrive_src"],
-            nc_remote=sync_config["nc_remote"],
-            nc_dest_path=sync_config["nc_dest_path"],
-            dry_run=False
-        )
+        
+        # Set current run info for live monitoring
+        runner.set_current_run(run.id, str(log_path))
+        
+        try:
+            result = runner.run_sync(
+                gdrive_remote=sync_config["gdrive_remote"],
+                gdrive_src=sync_config["gdrive_src"],
+                nc_remote=sync_config["nc_remote"],
+                nc_dest_path=sync_config["nc_dest_path"],
+                dry_run=False
+            )
+        finally:
+            # Clear current run info when done
+            runner.clear_current_run()
         
         # Update run with results
         run.status = result.status

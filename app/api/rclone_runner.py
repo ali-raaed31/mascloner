@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,6 +194,129 @@ class RcloneRunner:
             }
         self._remote_type_cache: Dict[str, Optional[str]] = {}
 
+        # Live monitoring state
+        self._lock = threading.Lock()
+        self._current_process: Optional[subprocess.Popen] = None
+        self._current_run_id: Optional[int] = None
+        self._current_log_path: Optional[str] = None
+        self._stop_requested: bool = False
+
+    # =========================================================================
+    # LIVE MONITORING METHODS
+    # =========================================================================
+
+    def set_current_run(self, run_id: int, log_path: str) -> None:
+        """Set the current run information for live monitoring."""
+        with self._lock:
+            self._current_run_id = run_id
+            self._current_log_path = log_path
+            self._stop_requested = False
+
+    def clear_current_run(self) -> None:
+        """Clear the current run information after sync completes."""
+        with self._lock:
+            self._current_process = None
+            self._current_run_id = None
+            self._current_log_path = None
+            self._stop_requested = False
+
+    def get_current_run_info(self) -> Optional[Dict[str, Any]]:
+        """Get information about the currently running sync."""
+        with self._lock:
+            if self._current_run_id is not None:
+                return {
+                    "run_id": self._current_run_id,
+                    "log_path": self._current_log_path,
+                    "is_running": (
+                        self._current_process is not None
+                        and self._current_process.poll() is None
+                    ),
+                }
+        return None
+
+    def request_stop(self) -> bool:
+        """Request graceful stop of current sync via SIGTERM.
+
+        Returns True if stop was requested, False if no process running.
+        """
+        with self._lock:
+            if self._current_process and self._current_process.poll() is None:
+                logger.info("Requesting graceful stop of rclone process")
+                self._current_process.terminate()  # SIGTERM - rclone finishes current file
+                self._stop_requested = True
+                return True
+            logger.warning("No running rclone process to stop")
+            return False
+
+    def was_stop_requested(self) -> bool:
+        """Check if a stop was requested for the current run."""
+        with self._lock:
+            return self._stop_requested
+
+    def tail_log_file(
+        self, since_line: int = 0, limit: int = 100
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Read new lines from the current log file.
+
+        Args:
+            since_line: Line number to start reading from (0-based)
+            limit: Maximum number of lines to return
+
+        Returns:
+            Tuple of (list of parsed log entries, next line number)
+        """
+        with self._lock:
+            log_path = self._current_log_path
+
+        if not log_path or not os.path.exists(log_path):
+            return [], since_line
+
+        logs: List[Dict[str, Any]] = []
+        current_line = 0
+        next_line = since_line
+
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f):
+                    current_line = line_num + 1
+                    if line_num < since_line:
+                        continue
+                    if len(logs) >= limit:
+                        break
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Parse JSON log line
+                    try:
+                        obj = json.loads(line)
+                        log_entry = {
+                            "line": line_num,
+                            "timestamp": obj.get("time", ""),
+                            "level": obj.get("level", "info"),
+                            "message": obj.get("msg", ""),
+                            "object": obj.get("object", ""),
+                            "size": obj.get("size", 0),
+                        }
+                        logs.append(log_entry)
+                    except json.JSONDecodeError:
+                        # Non-JSON line, include as raw message
+                        logs.append({
+                            "line": line_num,
+                            "timestamp": "",
+                            "level": "info",
+                            "message": line,
+                            "object": "",
+                            "size": 0,
+                        })
+
+                next_line = current_line
+        except Exception as e:
+            logger.error("Error reading log file %s: %s", log_path, e)
+
+        return logs, next_line
+
     def build_rclone_command(
         self,
         src: str,
@@ -323,9 +447,19 @@ class RcloneRunner:
                 bufsize=1,
             )
 
+            # Store process reference for live monitoring
+            with self._lock:
+                self._current_process = process
+
             return_code = process.wait()
 
-            if return_code == 0:
+            # Check if stop was requested (SIGTERM was sent)
+            was_stopped = self.was_stop_requested()
+
+            if was_stopped:
+                result.status = "stopped"
+                logger.info("Sync was stopped by user request")
+            elif return_code == 0:
                 result.status = "success"
             elif result.errors > 0:
                 result.status = "partial"
@@ -353,6 +487,10 @@ class RcloneRunner:
             logger.error("Unexpected error during rclone execution: %s", e)
             result.status = "error"
             result.error_message = str(e)
+        finally:
+            # Clear process reference when done
+            with self._lock:
+                self._current_process = None
 
         return result
 

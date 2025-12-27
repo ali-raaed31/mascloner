@@ -256,3 +256,42 @@ class APIClient:
     def update_rclone_config(self, settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update rclone performance configuration."""
         return self._make_request("POST", "/rclone/config", json=settings)
+
+    # Live sync monitoring
+    def get_current_run(self) -> Optional[Dict[str, Any]]:
+        """Get the currently running sync, if any.
+
+        Returns:
+            Run information dict or None if no sync is running
+        """
+        return self._make_request("GET", "/runs/current")
+
+    def get_run_logs(
+        self, run_id: int, since: int = 0, limit: int = 100
+    ) -> Optional[Dict[str, Any]]:
+        """Get log lines for a sync run.
+
+        Args:
+            run_id: The run ID to get logs for
+            since: Line number to start from (for incremental polling)
+            limit: Maximum number of lines to return
+
+        Returns:
+            Dict with logs list, next_line for pagination, and is_live flag
+        """
+        return self._make_request(
+            "GET", f"/runs/{run_id}/logs", params={"since": since, "limit": limit}
+        )
+
+    def stop_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """Request graceful stop of a running sync.
+
+        Sends SIGTERM to rclone, which finishes the current file before stopping.
+
+        Args:
+            run_id: The run ID to stop
+
+        Returns:
+            Success response or None on error
+        """
+        return self._make_request("POST", f"/runs/{run_id}/stop")

@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from .config import ConfigManager
-from .rclone_runner import RcloneRunner
+from .rclone_runner import RcloneRunner, get_runner as get_rclone_runner_impl
 from .scheduler import SyncScheduler
 
 if TYPE_CHECKING:
@@ -30,13 +30,13 @@ def get_config_manager() -> ConfigManager:
     return config
 
 
-@lru_cache(maxsize=1)
 def get_rclone_runner() -> RcloneRunner:
     """Get the singleton RcloneRunner instance.
 
-    Uses lru_cache to ensure only one instance exists.
+    Uses the same singleton as the scheduler to ensure consistency
+    between API endpoints and background sync jobs.
     """
-    return RcloneRunner()
+    return get_rclone_runner_impl()
 
 
 @lru_cache(maxsize=1)
@@ -70,6 +70,6 @@ def get_config() -> ConfigManager:
 def reset_dependencies() -> None:
     """Reset all cached dependencies (for testing)."""
     get_config_manager.cache_clear()
-    get_rclone_runner.cache_clear()
     get_sync_scheduler.cache_clear()
+    # Note: RcloneRunner singleton is managed in rclone_runner.py
 

@@ -260,6 +260,8 @@ with st.expander("📖 Navigation Guide"):
     **🔧 Setup Wizard** - Initial configuration for Google Drive and Nextcloud
 
     **🌳 File Tree** - Explore synced files with status indicators
+
+    **📊 Live Monitor** - Real-time monitoring of running syncs with log streaming and stop control
     """
     )
 

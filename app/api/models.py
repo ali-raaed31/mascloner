@@ -32,12 +32,14 @@ class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (
         Index("idx_runs_started_at", "started_at"),
+        Index("idx_runs_status", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    status: Mapped[str] = mapped_column(String(20))  # success|error|running|skipped
+    # Valid status values: running, success, error, skipped, stopped, partial
+    status: Mapped[str] = mapped_column(String(20))
     num_added: Mapped[int] = mapped_column(Integer, default=0)
     num_updated: Mapped[int] = mapped_column(Integer, default=0)
     bytes_transferred: Mapped[int] = mapped_column(BigInteger, default=0)
