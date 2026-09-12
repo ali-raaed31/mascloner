@@ -82,12 +82,25 @@ class SyncScheduler:
     def remove_sync_job(self, job_id: str = "sync") -> bool:
         """Remove the sync job."""
         try:
-            self.scheduler.remove_job(job_id)
-            logger.info("Sync job removed")
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+                logger.info("Sync job removed")
             return True
         except Exception as e:
             logger.error(f"Failed to remove sync job: {e}")
             return False
+
+    def is_running(self) -> bool:
+        """Check if the background scheduler engine is running."""
+        return bool(self.scheduler.running)
+
+    def is_enabled(self, job_id: str = "sync") -> bool:
+        """Check if scheduler is running and the sync job is scheduled."""
+        return bool(self.scheduler.running and self.scheduler.get_job(job_id) is not None)
+
+    def has_sync_job(self, job_id: str = "sync") -> bool:
+        """Check if sync job is registered in scheduler."""
+        return bool(self.scheduler.get_job(job_id) is not None)
     
     def get_job_info(self, job_id: str = "sync") -> Optional[Dict[str, Any]]:
         """Get information about the sync job."""
@@ -344,57 +357,46 @@ def get_scheduler() -> SyncScheduler:
     return sync_scheduler
 
 
-def start_scheduler(interval_minutes: Optional[int] = None, jitter_seconds: Optional[int] = None) -> bool:
-    """Start the scheduler with configuration from environment/database."""
+def start_scheduler(
+    schedule: Optional[Any] = None,
+    interval_min: Optional[int] = None,
+    jitter_sec: Optional[int] = None,
+    enabled: Optional[bool] = None,
+    *,
+    interval_minutes: Optional[int] = None,
+    jitter_seconds: Optional[int] = None,
+) -> bool:
+    """Start the scheduler with durable configuration from SQLite."""
     try:
-        # If no explicit values provided, try to load from database first
-        if interval_minutes is None or jitter_seconds is None:
-            try:
-                db = get_db_session()
-                
-                # Try to load from database
-                interval_config = db.execute(
-                    select(ConfigKV).where(ConfigKV.key == "interval_min")
-                ).scalar_one_or_none()
-                
-                jitter_config = db.execute(
-                    select(ConfigKV).where(ConfigKV.key == "jitter_sec")
-                ).scalar_one_or_none()
-                
-                # Use database values if available
-                interval = interval_minutes or (int(interval_config.value) if interval_config else None)
-                jitter = jitter_seconds or (int(jitter_config.value) if jitter_config else None)
-                
-                db.close()
-            except Exception as e:
-                logger.warning(f"Could not load schedule from database: {e}")
-                interval = interval_minutes
-                jitter = jitter_seconds
+        from ..configuration import Configuration, ScheduleSettings
+        from .db import get_db_session
+
+        if schedule is not None:
+            schedule_settings = schedule
         else:
-            interval = interval_minutes
-            jitter = jitter_seconds
-        
-        # Fall back to config/environment defaults if still None
-        if interval is None or jitter is None:
-            if config:
-                scheduler_config = config.get_scheduler_config()
-                interval = interval or scheduler_config["interval_min"]
-                jitter = jitter or scheduler_config["jitter_sec"]
-            else:
-                interval = interval or 5
-                jitter = jitter or 20
-        
-        # Start scheduler
+            try:
+                cfg = Configuration(session_factory=get_db_session)
+                schedule_settings = cfg.get_schedule()
+            except Exception as e:
+                logger.warning("Could not load schedule from Configuration: %s", e)
+                schedule_settings = ScheduleSettings()
+
+        eff_interval = interval_min or interval_minutes or schedule_settings.interval_min
+        eff_jitter = jitter_sec or jitter_seconds or schedule_settings.jitter_sec
+        is_enabled = enabled if enabled is not None else schedule_settings.enabled
+
         sync_scheduler.start()
-        
-        # Add sync job
-        sync_scheduler.add_sync_job(interval, jitter)
-        
-        logger.info(f"Scheduler started with {interval}min interval")
+
+        if is_enabled:
+            sync_scheduler.add_sync_job(eff_interval, eff_jitter)
+            logger.info("Scheduler started with %dmin interval (±%ds jitter)", eff_interval, eff_jitter)
+        else:
+            sync_scheduler.remove_sync_job()
+            logger.info("Scheduler started with sync job disabled")
+
         return True
-        
     except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
+        logger.error("Failed to start scheduler: %s", e)
         return False
 
 

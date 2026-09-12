@@ -106,7 +106,14 @@ with tab1:
         schedule = api.get_schedule()
         current_interval = schedule.get("interval_min", 5) if schedule else 5
         current_jitter = schedule.get("jitter_sec", 20) if schedule else 20
-        
+        is_enabled = schedule.get("enabled", True) if schedule else True
+        next_run = schedule.get("next_run_time") if schedule else None
+
+        if is_enabled:
+            st.info(f"🟢 **Schedule Active**: Runs every {current_interval}m (±{current_jitter}s). Next run: `{next_run or 'Pending'}`")
+        else:
+            st.warning("⏸️ **Schedule Paused**: Automated syncs are currently paused.")
+
         col1, col2 = st.columns(2)
         
         with col1:
@@ -131,19 +138,22 @@ with tab1:
         schedule_submitted = st.form_submit_button("💾 Save Schedule Settings", type="primary")
         
         if schedule_submitted:
-            new_schedule = {
-                "interval_min": interval_min,
-                "jitter_sec": jitter_sec
-            }
-            
-            with st.spinner("Saving schedule..."):
-                result = api.update_schedule(new_schedule)
+            if jitter_sec >= interval_min * 60:
+                st.error("❌ Jitter must be strictly less than the interval duration.")
+            else:
+                new_schedule = {
+                    "interval_min": interval_min,
+                    "jitter_sec": jitter_sec
+                }
                 
-                if result and result.get("success"):
-                    st.success("✅ Schedule settings saved successfully!")
-                    st.rerun()
-                else:
-                    st.error("❌ Failed to save schedule settings")
+                with st.spinner("Saving schedule..."):
+                    result = api.update_schedule(new_schedule)
+                    
+                    if result and result.get("success"):
+                        st.success("✅ Schedule settings saved successfully!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to save schedule settings")
     
     st.markdown("---")
 

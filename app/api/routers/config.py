@@ -64,7 +64,8 @@ async def get_status(
 
         total_runs_count = db.execute(select(func.count(Run.id))).scalar() or 0
 
-        job_info = scheduler.get_job_info()
+        scheduler_running = scheduler.is_enabled() if hasattr(scheduler, "is_enabled") else False
+        job_info = scheduler.get_job_info() if scheduler_running else None
         next_run = job_info.get("next_run_time") if job_info else None
 
         db_info = get_db_info()
@@ -114,7 +115,7 @@ async def get_status(
             last_run=last_run,
             last_sync=last_sync,
             next_run=next_run,
-            scheduler_running=scheduler.scheduler.running,
+            scheduler_running=scheduler_running,
             database_ok=database_ok,
             total_runs=total_runs_count,
             config_valid=config_valid,

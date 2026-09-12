@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StoreType(str, Enum):
@@ -69,6 +69,14 @@ class ScheduleSettings(BaseModel):
     enabled: bool = True
     interval_min: int = Field(5, ge=1, le=1440)
     jitter_sec: int = Field(20, ge=0, le=300)
+
+    @model_validator(mode="after")
+    def _validate_timing(self) -> ScheduleSettings:
+        if self.jitter_sec >= self.interval_min * 60:
+            raise ValueError(
+                f"jitter_sec ({self.jitter_sec}s) must be less than interval ({self.interval_min * 60}s)"
+            )
+        return self
 
 
 class RclonePerformanceSettings(BaseModel):

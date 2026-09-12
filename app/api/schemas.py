@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import re
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StatusResponse(BaseModel):
@@ -48,6 +48,25 @@ class ScheduleRequest(BaseModel):
 
     interval_min: int = Field(..., ge=1, le=1440)
     jitter_sec: int = Field(..., ge=0, le=300)
+    enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _validate_timing(self) -> ScheduleRequest:
+        if self.jitter_sec >= self.interval_min * 60:
+            raise ValueError(
+                f"jitter_sec ({self.jitter_sec}s) must be less than interval ({self.interval_min * 60}s)"
+            )
+        return self
+
+
+class ScheduleResponse(BaseModel):
+    """Response model for schedule configuration and runtime status."""
+
+    enabled: bool
+    interval_min: int
+    jitter_sec: int
+    interval: str
+    next_run_time: Optional[str] = None
 
 
 class RunResponse(BaseModel):
