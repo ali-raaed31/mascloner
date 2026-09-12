@@ -237,11 +237,16 @@ def sync_job() -> None:
         db.add(run)
         db.commit()
         db.refresh(run)
+        run_id = run.id
         
-        logger.info(f"Created sync run {run.id}")
+        logger.info(f"Created sync run {run_id}")
 
         # Set current run info for live monitoring
-        runner.set_current_run(run.id, str(log_path))
+        runner.set_current_run(run_id, str(log_path))
+
+        # Short transaction boundary: close session before long subprocess execution
+        db.close()
+        db = None
 
         try:
             result = runner.run_sync(
@@ -256,30 +261,33 @@ def sync_job() -> None:
             # Clear current run info when done
             runner.clear_current_run()
         
-        # Update run with results
-        run.status = result.status
-        run.num_added = result.num_added
-        run.num_updated = result.num_updated
-        run.bytes_transferred = result.bytes_transferred
-        run.errors = result.errors
-        run.finished_at = datetime.now(timezone.utc)
-        
-        # Add file events unless lightweight mode is enabled
-        lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
-        if not lightweight_events:
-            for event in result.events:
-                file_event = FileEvent(
-                    run_id=run.id,
-                    timestamp=event.timestamp,
-                    action=event.action,
-                    file_path=event.file_path,
-                    file_size=event.file_size,
-                    file_hash=event.file_hash,
-                    message=event.message
-                )
-                db.add(file_event)
-        
-        db.commit()
+        # Open fresh session to record completion in a short transaction
+        db = get_db_session()
+        active_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
+        if active_run:
+            active_run.status = result.status
+            active_run.num_added = result.num_added
+            active_run.num_updated = result.num_updated
+            active_run.bytes_transferred = result.bytes_transferred
+            active_run.errors = result.errors
+            active_run.finished_at = datetime.now(timezone.utc)
+            
+            # Add file events unless lightweight mode is enabled
+            lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
+            if not lightweight_events:
+                for event in result.events:
+                    file_event = FileEvent(
+                        run_id=active_run.id,
+                        timestamp=event.timestamp,
+                        action=event.action,
+                        file_path=event.file_path,
+                        file_size=event.file_size,
+                        file_hash=event.file_hash,
+                        message=event.message
+                    )
+                    db.add(file_event)
+            
+            db.commit()
         
         logger.info(f"Sync job completed: {result.status}")
         logger.info(f"Files: {result.num_added} added, {result.num_updated} updated")
@@ -290,22 +298,26 @@ def sync_job() -> None:
         logger.error(f"Sync job failed: {e}")
         
         # Update run status if we have a run record
-        if run and db:
+        if 'run_id' in locals() and run_id:
             try:
-                run.status = "error"
-                run.finished_at = datetime.now(timezone.utc)
-                
-                # Add error event
-                error_event = FileEvent(
-                    run_id=run.id,
-                    timestamp=datetime.now(timezone.utc),
-                    action="error",
-                    file_path="",
-                    file_size=0,
-                    message=f"Sync job error: {str(e)}"
-                )
-                db.add(error_event)
-                db.commit()
+                if not db:
+                    db = get_db_session()
+                failed_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
+                if failed_run:
+                    failed_run.status = "error"
+                    failed_run.finished_at = datetime.now(timezone.utc)
+                    
+                    # Add error event
+                    error_event = FileEvent(
+                        run_id=run_id,
+                        timestamp=datetime.now(timezone.utc),
+                        action="error",
+                        file_path="",
+                        file_size=0,
+                        message=f"Sync job error: {str(e)}"
+                    )
+                    db.add(error_event)
+                    db.commit()
             except Exception as commit_error:
                 logger.error(f"Failed to update run status: {commit_error}")
     

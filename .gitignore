@@ -4,7 +4,7 @@
 .env
 etc/rclone.conf
 etc/nxg-sync.env
-data/*.db
+data/
 logs/
 __pycache__/
 .venv/

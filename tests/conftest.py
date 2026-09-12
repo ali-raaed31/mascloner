@@ -38,14 +38,11 @@ def test_db_path(temp_dir: Path) -> Path:
 
 @pytest.fixture(scope="function")
 def test_engine(test_db_path: Path):
-    """Create a test database engine."""
+    """Create a test database engine with durable SQLite pragmas."""
     from app.api.models import Base
+    from app.api.db import create_sqlite_engine
 
-    engine = create_engine(
-        f"sqlite:///{test_db_path}",
-        future=True,
-        connect_args={"check_same_thread": False},
-    )
+    engine = create_sqlite_engine(test_db_path)
     Base.metadata.create_all(bind=engine)
     yield engine
     engine.dispose()

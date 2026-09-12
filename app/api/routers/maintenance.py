@@ -1,6 +1,7 @@
 """Maintenance and diagnostic endpoints."""
 
 from __future__ import annotations
+from datetime import datetime, timezone
 
 import json
 import logging
@@ -135,3 +136,39 @@ async def get_database_info():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get database info: {exc}",
         )
+
+@router.post("/maintenance/backup", response_model=ApiResponse)
+async def trigger_online_backup():
+    """Trigger an online, consistency-verified SQLite database backup."""
+    from ...maintenance.backup import perform_online_backup, OnlineBackupError
+    from ..db import db_path
+
+    try:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        target_dir = Path("/var/backups/mascloner") if Path("/var/backups/mascloner").exists() else db_path.parent / "backups"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / f"mascloner_backup_{timestamp}_database.db"
+
+        info = perform_online_backup(source_db_path=db_path, target_path=target_file)
+        return ApiResponse(
+            success=True,
+            message="Online database backup completed and verified successfully",
+            data={
+                "target": info["target"],
+                "size_bytes": info["size_bytes"],
+                "verified": info["verified"],
+                "timestamp": info["timestamp"],
+            },
+        )
+    except OnlineBackupError as exc:
+        logger.error("Online backup failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database backup failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Unexpected error during backup: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database backup failed: {exc}",
+        ) from exc

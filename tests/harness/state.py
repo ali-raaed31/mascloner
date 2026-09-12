@@ -86,13 +86,8 @@ class ProcessStateReset:
             except Exception:
                 pass
 
-        new_engine = create_engine(
-            f"sqlite:///{new_db_path}",
-            future=True,
-            pool_pre_ping=True,
-            echo=False,
-            connect_args={"check_same_thread": False},
-        )
+        from app.api.db import create_sqlite_engine
+        new_engine = create_sqlite_engine(new_db_path)
         api_db.engine = new_engine
         api_db.SessionLocal = sessionmaker(
             bind=new_engine,

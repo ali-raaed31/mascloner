@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 import dotenv
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine
+from app.api.db import create_sqlite_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.models import Base, ConfigKV, FileEvent, Run
@@ -82,11 +83,7 @@ class InstallationRoot:
 
     def init_database(self) -> None:
         """Create database tables and stamp schema."""
-        engine = create_engine(
-            f"sqlite:///{self.db_path}",
-            future=True,
-            connect_args={"check_same_thread": False},
-        )
+        engine = create_sqlite_engine(self.db_path)
         Base.metadata.create_all(bind=engine)
         engine.dispose()
 
@@ -141,11 +138,7 @@ NC_DEST_PATH=FreshDestination
         self.init_database()
 
         # Seed legacy SQLite database with legacy statuses and configs
-        engine = create_engine(
-            f"sqlite:///{self.db_path}",
-            future=True,
-            connect_args={"check_same_thread": False},
-        )
+        engine = create_sqlite_engine(self.db_path)
         Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
         with Session() as session:
             # Legacy ConfigKV items

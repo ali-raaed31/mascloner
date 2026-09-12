@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator
 
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, event, func, select, text, Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,14 +26,33 @@ DB_PATH = os.environ.get("MASCLONER_DB_PATH", "data/mascloner.db")
 db_path = Path(DB_PATH)
 db_path.parent.mkdir(parents=True, exist_ok=True)
 
+def configure_sqlite_pragmas(target_engine: Engine) -> None:
+    """Apply durable SQLite PRAGMAs (WAL, synchronous=NORMAL, foreign_keys=ON, busy_timeout=5000)."""
+    @event.listens_for(target_engine, "connect")
+    def _set_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.execute("PRAGMA journal_mode = WAL")
+        cursor.execute("PRAGMA synchronous = NORMAL")
+        cursor.execute("PRAGMA busy_timeout = 5000")
+        cursor.close()
+
+
+def create_sqlite_engine(database_path: str | Path) -> Engine:
+    """Create and configure a SQLAlchemy Engine for SQLite with durable pragmas."""
+    eng = create_engine(
+        f"sqlite:///{database_path}",
+        future=True,
+        pool_pre_ping=True,
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+    configure_sqlite_pragmas(eng)
+    return eng
+
+
 # Create engine with appropriate settings
-engine = create_engine(
-    f"sqlite:///{DB_PATH}",
-    future=True,
-    pool_pre_ping=True,
-    echo=False,  # Set to True for SQL debugging
-    connect_args={"check_same_thread": False},  # Required for SQLite with FastAPI
-)
+engine = create_sqlite_engine(DB_PATH)
 
 # Create session factory
 SessionLocal = sessionmaker(
