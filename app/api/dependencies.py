@@ -61,6 +61,14 @@ def get_scheduler() -> SyncScheduler:
     return get_sync_scheduler()
 
 
+
+@lru_cache(maxsize=1)
+def get_configuration():
+    """Get the singleton Configuration module instance."""
+    from app.configuration import Configuration
+    from app.api.db import get_db_session
+    return Configuration(session_factory=get_db_session)
+
 def get_config() -> ConfigManager:
     """FastAPI dependency for ConfigManager."""
     return get_config_manager()
@@ -71,5 +79,6 @@ def reset_dependencies() -> None:
     """Reset all cached dependencies (for testing)."""
     get_config_manager.cache_clear()
     get_sync_scheduler.cache_clear()
+    get_configuration.cache_clear()
     # Note: RcloneRunner singleton is managed in rclone_runner.py
 

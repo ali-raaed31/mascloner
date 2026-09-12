@@ -281,3 +281,11 @@ class APIClient:
             Success response or None on error
         """
         return self._make_request("POST", f"/runs/{run_id}/stop")
+
+    def get_sync_paths(self) -> Optional[Dict[str, Any]]:
+        """Get current sync folder paths."""
+        return self._make_request("GET", "/config/paths")
+
+    def update_sync_paths(self, paths: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update sync folder paths."""
+        return self._make_request("POST", "/config/paths", json=paths)

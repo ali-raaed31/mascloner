@@ -163,12 +163,20 @@ class SqliteStoreAdapter:
                 return val
         return os.getenv(key, default)
 
+    def _get_kv_row(self, key: str, session: Session) -> Optional[ConfigKV]:
+        return session.execute(select(ConfigKV).where(ConfigKV.key == key)).scalar_one_or_none()
+
     def _get_kv(self, key: str, session: Session) -> Optional[str]:
-        item = session.execute(select(ConfigKV).where(ConfigKV.key == key)).scalar_one_or_none()
+        item = self._get_kv_row(key, session)
         return item.value if item else None
 
-    def _set_kv(self, key: str, value: str, session: Session) -> None:
-        session.merge(ConfigKV(key=key, value=value))
+    def _set_kv(self, key: str, value: str, session: Session, provenance: str = "user") -> None:
+        session.merge(ConfigKV(key=key, value=value, provenance=provenance))
+
+    def get_provenance(self, key: str) -> Optional[str]:
+        with self.session_factory() as session:
+            item = self._get_kv_row(key, session)
+            return item.provenance if item else None
 
     def load_schedule(self) -> ScheduleSettings:
         with self.session_factory() as session:
@@ -195,14 +203,14 @@ class SqliteStoreAdapter:
 
     def load_performance(self) -> RclonePerformanceSettings:
         with self.session_factory() as session:
-            transfers_val = self._get_kv("rclone_transfers", session) or self._fallback("RCLONE_TRANSFERS", "4")
-            checkers_val = self._get_kv("rclone_checkers", session) or self._fallback("RCLONE_CHECKERS", "8")
-            tpslimit_val = self._get_kv("rclone_tpslimit", session) or self._fallback("RCLONE_TPSLIMIT", "10")
-            tpslimit_burst_val = self._get_kv("rclone_tpslimit_burst", session) or self._fallback("RCLONE_TPSLIMIT_BURST", "1")
-            buffer_size_val = self._get_kv("rclone_buffer_size", session) or self._fallback("RCLONE_BUFFER_SIZE", "32Mi")
-            chunk_size_val = self._get_kv("rclone_drive_chunk_size", session) or self._fallback("RCLONE_DRIVE_CHUNK_SIZE", "64M")
-            cutoff_val = self._get_kv("rclone_drive_upload_cutoff", session) or self._fallback("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M")
-            fast_list_val = self._get_kv("rclone_fast_list", session) or self._fallback("RCLONE_FAST_LIST", "false")
+            transfers_val = self._get_kv("transfers", session) or self._get_kv("rclone_transfers", session) or self._fallback("RCLONE_TRANSFERS", "4")
+            checkers_val = self._get_kv("checkers", session) or self._get_kv("rclone_checkers", session) or self._fallback("RCLONE_CHECKERS", "8")
+            tpslimit_val = self._get_kv("tpslimit", session) or self._get_kv("rclone_tpslimit", session) or self._fallback("RCLONE_TPSLIMIT", "10")
+            tpslimit_burst_val = self._get_kv("tpslimit_burst", session) or self._get_kv("rclone_tpslimit_burst", session) or self._fallback("RCLONE_TPSLIMIT_BURST", "1")
+            buffer_size_val = self._get_kv("buffer_size", session) or self._get_kv("rclone_buffer_size", session) or self._fallback("RCLONE_BUFFER_SIZE", "32Mi")
+            chunk_size_val = self._get_kv("drive_chunk_size", session) or self._get_kv("rclone_drive_chunk_size", session) or self._fallback("RCLONE_DRIVE_CHUNK_SIZE", "64M")
+            cutoff_val = self._get_kv("drive_upload_cutoff", session) or self._get_kv("rclone_drive_upload_cutoff", session) or self._fallback("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M")
+            fast_list_val = self._get_kv("fast_list", session) or self._get_kv("rclone_fast_list", session) or self._fallback("RCLONE_FAST_LIST", "false")
 
             return RclonePerformanceSettings(
                 transfers=int(transfers_val),
@@ -215,20 +223,20 @@ class SqliteStoreAdapter:
                 fast_list=fast_list_val.lower() in ["true", "1", "yes"],
             )
 
-    def save_performance(self, settings: RclonePerformanceSettings) -> None:
+    def save_performance(self, settings: RclonePerformanceSettings, provenance: str = "user") -> None:
         with self.session_factory() as session:
             try:
-                self._set_kv("rclone_transfers", str(settings.transfers), session)
-                self._set_kv("rclone_checkers", str(settings.checkers), session)
-                self._set_kv("rclone_tpslimit", str(settings.tpslimit), session)
-                self._set_kv("rclone_tpslimit_burst", str(settings.tpslimit_burst), session)
+                self._set_kv("transfers", str(settings.transfers), session, provenance)
+                self._set_kv("checkers", str(settings.checkers), session, provenance)
+                self._set_kv("tpslimit", str(settings.tpslimit), session, provenance)
+                self._set_kv("tpslimit_burst", str(settings.tpslimit_burst), session, provenance)
                 if settings.buffer_size:
-                    self._set_kv("rclone_buffer_size", settings.buffer_size, session)
+                    self._set_kv("buffer_size", settings.buffer_size, session, provenance)
                 if settings.drive_chunk_size:
-                    self._set_kv("rclone_drive_chunk_size", settings.drive_chunk_size, session)
+                    self._set_kv("drive_chunk_size", settings.drive_chunk_size, session, provenance)
                 if settings.drive_upload_cutoff:
-                    self._set_kv("rclone_drive_upload_cutoff", settings.drive_upload_cutoff, session)
-                self._set_kv("rclone_fast_list", "true" if settings.fast_list else "false", session)
+                    self._set_kv("drive_upload_cutoff", settings.drive_upload_cutoff, session, provenance)
+                self._set_kv("fast_list", "true" if settings.fast_list else "false", session, provenance)
                 session.commit()
             except Exception as exc:
                 session.rollback()
@@ -240,11 +248,11 @@ class SqliteStoreAdapter:
             nc_dest_path = self._get_kv("nc_dest_path", session) or self._fallback("NC_DEST_PATH", "")
             return SyncPathsSettings(gdrive_src=gdrive_src, nc_dest_path=nc_dest_path)
 
-    def save_sync_paths(self, settings: SyncPathsSettings) -> None:
+    def save_sync_paths(self, settings: SyncPathsSettings, provenance: str = "user") -> None:
         with self.session_factory() as session:
             try:
-                self._set_kv("gdrive_src", settings.gdrive_src, session)
-                self._set_kv("nc_dest_path", settings.nc_dest_path, session)
+                self._set_kv("gdrive_src", settings.gdrive_src, session, provenance)
+                self._set_kv("nc_dest_path", settings.nc_dest_path, session, provenance)
                 session.commit()
             except Exception as exc:
                 session.rollback()

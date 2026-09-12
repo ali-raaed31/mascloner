@@ -6,6 +6,7 @@ Implements the single typed Configuration boundary required by ADR 0001, ADR 000
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Type, TypeVar, Union
@@ -62,16 +63,30 @@ class Configuration:
         env_path: Optional[Path] = None,
         db_session_factory: Optional[Callable[[], Session]] = None,
         rclone_conf_path: Optional[Path] = None,
+        session_factory: Optional[Callable[[], Session]] = None,
     ) -> None:
-        resolved_base = base_dir or Path("/srv/mascloner")
-        resolved_env = env_path or (resolved_base / ".env")
+        if base_dir:
+            resolved_base = Path(base_dir)
+        elif "MASCLONER_BASE_DIR" in os.environ:
+            resolved_base = Path(os.environ["MASCLONER_BASE_DIR"])
+        else:
+            resolved_base = Path("/srv/mascloner")
 
-        self._env_adapter = EnvStoreAdapter(env_path=resolved_env, base_dir=base_dir)
+        if env_path:
+            resolved_env = Path(env_path)
+        elif "MASCLONER_ENV_FILE" in os.environ:
+            p = Path(os.environ["MASCLONER_ENV_FILE"])
+            resolved_env = p if p.is_absolute() else (resolved_base / p).resolve()
+        else:
+            resolved_env = resolved_base / ".env"
+
+        self._env_adapter = EnvStoreAdapter(env_path=resolved_env, base_dir=resolved_base)
         self._bootstrap = self._env_adapter.load_bootstrap()
 
         # Database session factory
-        if db_session_factory:
-            self._session_factory = db_session_factory
+        effective_session_factory = session_factory or db_session_factory
+        if effective_session_factory:
+            self._session_factory = effective_session_factory
         else:
             from app.api.db import SessionLocal
             self._session_factory = SessionLocal
@@ -153,6 +168,14 @@ class Configuration:
         """Validate and persist retention policy settings to SQLite."""
         typed_settings = _coerce_model(RetentionPolicySettings, settings)
         self._sqlite_adapter.save_retention_policy(typed_settings)
+
+    def get_provenance(self, key: str) -> Optional[str]:
+        """Return the provenance of a SQLite setting key."""
+        return self._sqlite_adapter.get_provenance(key)
+
+    def create_run_snapshot(self) -> tuple[SyncPathsSettings, RclonePerformanceSettings]:
+        """Create an immutable snapshot of paths and performance settings for a sync run."""
+        return (self.get_sync_paths(), self.get_performance())
 
     # --- Endpoints metadata (rclone.conf) ---
     def get_all_endpoint_metadata(self) -> Dict[str, EndpointMetadata]:

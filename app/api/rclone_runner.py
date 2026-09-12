@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,14 +240,18 @@ class RcloneRunner:
 
         Returns True if stop was requested, False if no process running.
         """
-        with self._lock:
-            if self._current_process and self._current_process.poll() is None:
-                logger.info("Requesting graceful stop of rclone process")
-                self._current_process.terminate()  # SIGTERM - rclone finishes current file
-                self._stop_requested = True
-                return True
-            logger.warning("No running rclone process to stop")
-            return False
+        for _ in range(30):
+            with self._lock:
+                if self._current_process and self._current_process.poll() is None:
+                    logger.info("Requesting graceful stop of rclone process")
+                    self._current_process.terminate()  # SIGTERM - rclone finishes current file
+                    self._stop_requested = True
+                    return True
+                if not self._current_run_id:
+                    break
+            time.sleep(0.05)
+        logger.warning("No running rclone process to stop")
+        return False
 
     def was_stop_requested(self) -> bool:
         """Check if a stop was requested for the current run."""
@@ -323,9 +328,17 @@ class RcloneRunner:
         dest: str,
         log_file: str,
         additional_flags: Optional[List[str]] = None,
+        performance_snapshot: Optional[Any] = None,
     ) -> List[str]:
         """Build rclone command with standard flags for MasCloner."""
         rclone_conf = get_rclone_conf_path()
+
+        perf = dict(self.rclone_config)
+        if performance_snapshot is not None:
+            if hasattr(performance_snapshot, "model_dump"):
+                perf.update(performance_snapshot.model_dump())
+            elif isinstance(performance_snapshot, dict):
+                perf.update(performance_snapshot)
 
         base_cmd = [
             "rclone",
@@ -335,33 +348,33 @@ class RcloneRunner:
             f"--config={rclone_conf}",
             f"--log-file={log_file}",
             "--use-json-log",
-            f"--log-level={self.rclone_config['log_level']}",
+            f"--log-level={perf.get('log_level', 'INFO')}",
             "--stats-log-level=NOTICE",
-            f"--stats={self.rclone_config.get('stats_interval', '60s')}",
+            f"--stats={perf.get('stats_interval', '60s')}",
             "--stats-one-line",
-            f"--checkers={self.rclone_config['checkers']}",
-            f"--transfers={self.rclone_config['transfers']}",
-            f"--tpslimit={self.rclone_config['tpslimit']}",
-            f"--bwlimit={self.rclone_config['bwlimit']}",
-            f"--buffer-size={self.rclone_config.get('buffer_size', '32Mi')}",
-            f"--retries={self.rclone_config.get('retries', 5)}",
-            f"--retries-sleep={self.rclone_config.get('retries_sleep', '10s')}",
-            f"--low-level-retries={self.rclone_config.get('low_level_retries', 10)}",
-            f"--timeout={self.rclone_config.get('timeout', '5m')}",
+            f"--checkers={perf['checkers']}",
+            f"--transfers={perf['transfers']}",
+            f"--tpslimit={perf['tpslimit']}",
+            f"--bwlimit={perf.get('bwlimit', '0')}",
+            f"--buffer-size={perf.get('buffer_size', '32Mi')}",
+            f"--retries={perf.get('retries', 5)}",
+            f"--retries-sleep={perf.get('retries_sleep', '10s')}",
+            f"--low-level-retries={perf.get('low_level_retries', 10)}",
+            f"--timeout={perf.get('timeout', '5m')}",
             # Google Drive specific flags
-            f"--drive-export-formats={self.rclone_config['drive_export']}",
+            f"--drive-export-formats={perf.get('drive_export', 'docx,xlsx,pptx')}",
             "--drive-shared-with-me",
             "--drive-skip-shortcuts",
         ]
 
-        if self.rclone_config.get("tpslimit_burst"):
-            base_cmd.append(f"--tpslimit-burst={self.rclone_config['tpslimit_burst']}")
-        if self.rclone_config.get("fast_list"):
+        if perf.get("tpslimit_burst"):
+            base_cmd.append(f"--tpslimit-burst={perf['tpslimit_burst']}")
+        if perf.get("fast_list"):
             base_cmd.append("--fast-list")
-        if self.rclone_config.get("drive_chunk_size"):
-            base_cmd.append(f"--drive-chunk-size={self.rclone_config['drive_chunk_size']}")
-        if self.rclone_config.get("drive_upload_cutoff"):
-            base_cmd.append(f"--drive-upload-cutoff={self.rclone_config['drive_upload_cutoff']}")
+        if perf.get("drive_chunk_size"):
+            base_cmd.append(f"--drive-chunk-size={perf['drive_chunk_size']}")
+        if perf.get("drive_upload_cutoff"):
+            base_cmd.append(f"--drive-upload-cutoff={perf['drive_upload_cutoff']}")
 
         if additional_flags:
             base_cmd.extend(additional_flags)
@@ -379,6 +392,7 @@ class RcloneRunner:
         nc_remote: str,
         nc_dest_path: str,
         dry_run: bool = False,
+        performance_snapshot: Optional[Any] = None,
     ) -> SyncResult:
         """Execute sync operation synchronously (for scheduler use)."""
         result = SyncResult(status="running")
@@ -399,7 +413,7 @@ class RcloneRunner:
         logger.info("Starting sync: %s -> %s", src, dest)
 
         try:
-            cmd = self.build_rclone_command(src, dest, str(log_file))
+            cmd = self.build_rclone_command(src, dest, str(log_file), performance_snapshot=performance_snapshot)
 
             if dry_run:
                 cmd.append("--dry-run")

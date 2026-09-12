@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+import re
+from pydantic import BaseModel, Field, field_validator
 
 
 class StatusResponse(BaseModel):
@@ -20,6 +21,8 @@ class StatusResponse(BaseModel):
     remotes_configured: Dict[str, bool]
 
 
+SIZE_REGEX = re.compile(r"^\d+(\.\d+)?(b|k|m|g|t|p|ki|mi|gi|ti|pi|kb|mb|gb|tb|pb)?$", re.IGNORECASE)
+
 class ConfigRequest(BaseModel):
     """Request model for updating sync configuration."""
 
@@ -27,6 +30,17 @@ class ConfigRequest(BaseModel):
     gdrive_src: str
     nc_remote: str
     nc_dest_path: str
+
+    @field_validator("gdrive_src", "nc_dest_path")
+    @classmethod
+    def _validate_paths(cls, v: str) -> str:
+        if "\0" in v:
+            raise ValueError("Null bytes not allowed in folder paths")
+        stripped = v.strip()
+        segments = [seg for seg in stripped.replace("\\", "/").split("/") if seg]
+        if ".." in segments:
+            raise ValueError("Path traversal segments (..) are not allowed")
+        return "/".join(segments)
 
 
 class ScheduleRequest(BaseModel):
@@ -81,6 +95,18 @@ class RcloneConfigRequest(BaseModel):
     drive_chunk_size: Optional[str] = Field(None, description="Google Drive chunk size (e.g. 64M)")
     drive_upload_cutoff: Optional[str] = Field(None, description="Threshold for chunked uploads (e.g. 128M)")
     fast_list: bool = Field(False, description="Toggle rclone --fast-list optimisation")
+
+    @field_validator("buffer_size", "drive_chunk_size", "drive_upload_cutoff")
+    @classmethod
+    def _validate_size_strings(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if not SIZE_REGEX.match(stripped):
+            raise ValueError(f"Invalid size string {v!r}. Must be a valid byte/size specification (e.g. 32Mi, 64M, 128M).")
+        return stripped
 
 
 class GoogleDriveOAuthRequest(BaseModel):

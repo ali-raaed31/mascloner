@@ -24,6 +24,7 @@ class ConfigKV(Base):
     key: Mapped[str] = mapped_column(String(120), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now)
+    provenance: Mapped[Optional[str]] = mapped_column(String(50), default="user", nullable=True)
 
 
 class Run(Base):

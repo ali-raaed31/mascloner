@@ -146,6 +146,40 @@ with tab1:
                     st.error("❌ Failed to save schedule settings")
     
     st.markdown("---")
+
+    # Synchronization paths form
+    st.subheader("📁 Synchronization Paths")
+    current_paths = api.get_sync_paths() or {}
+    with st.form("sync_paths_config"):
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            gdrive_src = st.text_input(
+                "Google Drive Source Folder",
+                value=current_paths.get("gdrive_src", ""),
+                help="Folder in Google Drive to sync from (leave empty for root)",
+            )
+        with col_p2:
+            nc_dest_path = st.text_input(
+                "Nextcloud Destination Path",
+                value=current_paths.get("nc_dest_path", ""),
+                help="Folder in Nextcloud to sync into",
+            )
+
+        paths_submitted = st.form_submit_button("💾 Save Sync Paths", type="primary")
+        if paths_submitted:
+            with st.spinner("Saving sync paths..."):
+                paths_result = api.update_sync_paths({
+                    "gdrive_src": gdrive_src,
+                    "nc_dest_path": nc_dest_path,
+                })
+                if paths_result and paths_result.get("success"):
+                    st.success("✅ Sync paths saved successfully!")
+                    st.rerun()
+                else:
+                    err_msg = paths_result.get("detail", "Failed to save sync paths") if paths_result else "API error"
+                    st.error(f"❌ {err_msg}")
+
+    st.markdown("---")
     
     # Schedule controls
     st.subheader("🎛️ Schedule Controls")
@@ -178,7 +212,6 @@ with tab1:
                 result = api.trigger_sync()
                 if result and result.get("success"):
                     st.success("✅ Sync triggered successfully!")
-                    st.rerun()
                 else:
                     st.error("❌ Failed to trigger sync")
     
@@ -458,7 +491,7 @@ with tab4:
 
     with st.form("rclone_performance_form"):
         st.markdown("""
-        Fine-tune rclone's concurrency and rate limits for Google Drive. Values are stored in `.env` and apply to future sync runs.
+        Fine-tune rclone's concurrency and rate limits for Google Drive. Values are stored in SQLite and apply to future sync runs.
         """)
 
         col1, col2, col3 = st.columns(3)

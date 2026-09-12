@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -90,7 +91,12 @@ class RclonePerformanceSettings(BaseModel):
         if v is None:
             return None
         stripped = v.strip()
-        return stripped if stripped else None
+        if not stripped:
+            return None
+        size_regex = re.compile(r"^\d+(\.\d+)?(b|k|m|g|t|p|ki|mi|gi|ti|pi|kb|mb|gb|tb|pb)?$", re.IGNORECASE)
+        if not size_regex.match(stripped):
+            raise ValueError(f"Invalid size string {v!r}. Must be a valid byte/size specification (e.g. 32Mi, 64M, 128M).")
+        return stripped
 
 
 class SyncPathsSettings(BaseModel):
@@ -104,9 +110,13 @@ class SyncPathsSettings(BaseModel):
     @field_validator("gdrive_src", "nc_dest_path")
     @classmethod
     def _normalize_path(cls, v: str) -> str:
+        if "\0" in v:
+            raise ValueError("Null bytes not allowed in folder paths")
         stripped = v.strip()
-        # Normalize leading and trailing slashes for consistency across cloud providers
-        return stripped.strip("/")
+        segments = [seg for seg in stripped.replace("\\", "/").split("/") if seg]
+        if ".." in segments:
+            raise ValueError("Path traversal segments (..) are not allowed")
+        return "/".join(segments)
 
 
 class RetentionPolicySettings(BaseModel):

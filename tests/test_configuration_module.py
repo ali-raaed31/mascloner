@@ -25,6 +25,7 @@ from app.api.config import ConfigManager
 from app.api.models import ConfigKV
 from tests.harness.assertions import assert_no_secrets_leaked
 from tests.harness.installation import InstallationRoot
+from tests.harness.state import ProcessStateReset
 
 from app.configuration import (
     Configuration,
@@ -263,33 +264,33 @@ def test_shadow_reads_match_legacy_resolution(
     import app.api.scheduler as legacy_scheduler
     from app.api.scheduler import get_sync_config_from_db
 
-    # Initialize a legacy ConfigManager bound to the isolated environment
-    os.environ["MASCLONER_FERNET_KEY"] = isolated_install.fernet_key
-    legacy_manager = ConfigManager(env_file=str(isolated_install.root_env_path))
-    monkeypatch.setattr(legacy_scheduler, "config", legacy_manager)
+    with ProcessStateReset(isolated_install.get_env_dict()):
+        # Initialize a legacy ConfigManager bound to the isolated environment
+        legacy_manager = ConfigManager(env_file=str(isolated_install.root_env_path))
+        monkeypatch.setattr(legacy_scheduler, "config", legacy_manager)
 
-    legacy_base = legacy_manager.get_base_config()
-    bootstrap = test_config.get_bootstrap()
-    assert bootstrap.base_dir == legacy_base["base_dir"]
+        legacy_base = legacy_manager.get_base_config()
+        bootstrap = test_config.get_bootstrap()
+        assert bootstrap.base_dir == legacy_base["base_dir"]
 
-    legacy_rclone = legacy_manager.get_rclone_config()
-    perf = test_config.get_performance()
-    assert perf.transfers == legacy_rclone["transfers"]
-    assert perf.checkers == legacy_rclone["checkers"]
+        legacy_rclone = legacy_manager.get_rclone_config()
+        perf = test_config.get_performance()
+        assert perf.transfers == legacy_rclone["transfers"]
+        assert perf.checkers == legacy_rclone["checkers"]
 
-    engine = create_engine(f"sqlite:///{isolated_install.db_path}")
-    Session = sessionmaker(bind=engine)
-    with Session() as session:
-        legacy_sync = get_sync_config_from_db(session)
-        paths = test_config.get_sync_paths()
-        assert paths.gdrive_src == legacy_sync["gdrive_src"]
-        assert paths.nc_dest_path == legacy_sync["nc_dest_path"]
+        engine = create_engine(f"sqlite:///{isolated_install.db_path}")
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            legacy_sync = get_sync_config_from_db(session)
+            paths = test_config.get_sync_paths()
+            assert paths.gdrive_src == legacy_sync["gdrive_src"]
+            assert paths.nc_dest_path == legacy_sync["nc_dest_path"]
 
-    # Module provides compare_with_legacy helper
-    with Session() as session:
-        comparison = test_config.compare_with_legacy(legacy_manager, session)
-        assert comparison["matches"] is True
-        assert comparison["discrepancies"] == []
+        # Module provides compare_with_legacy helper
+        with Session() as session:
+            comparison = test_config.compare_with_legacy(legacy_manager, session)
+            assert comparison["matches"] is True
+            assert comparison["discrepancies"] == []
 
 
 def test_no_fernet_used_for_new_writes(test_config: Configuration, isolated_install: InstallationRoot):

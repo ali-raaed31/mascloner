@@ -7,6 +7,8 @@ and background schedulers between test runs.
 
 from __future__ import annotations
 
+from app.api.dependencies import reset_dependencies
+
 import os
 import threading
 from typing import Any, Dict, Optional
@@ -110,6 +112,7 @@ class ProcessStateReset:
         api_scheduler.scheduler = BackgroundScheduler(timezone="UTC")
         api_scheduler.sync_scheduler.scheduler = api_scheduler.scheduler
         api_scheduler.sync_scheduler.runner = api_runner.get_runner()
+        reset_dependencies()
 
     def restore(self) -> None:
         """Restore original environment and references."""
@@ -137,6 +140,7 @@ class ProcessStateReset:
         os.environ.clear()
         os.environ.update(self._orig_env)
 
+        reset_dependencies()
         # Re-reset config with restored env
         try:
             restored_config = api_config.ConfigManager()

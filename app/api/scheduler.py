@@ -194,12 +194,29 @@ def sync_job() -> None:
             logger.error(f"Invalid sync configuration: {config_errors}")
             return
         
+        # Capture immutable snapshot for this execution
+        try:
+            from ..configuration import Configuration
+
+            cfg_module = Configuration(session_factory=get_db_session)
+            paths_snapshot, perf_snapshot = cfg_module.create_run_snapshot()
+            sync_paths_src = paths_snapshot.gdrive_src or sync_config["gdrive_src"]
+            sync_paths_dest = paths_snapshot.nc_dest_path or sync_config["nc_dest_path"]
+        except Exception as exc:
+            logger.warning("Failed to create configuration snapshot: %s", exc)
+            perf_snapshot = None
+            sync_paths_src = sync_config["gdrive_src"]
+            sync_paths_dest = sync_config["nc_dest_path"]
+
         # Create run record
         log_dir = get_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         log_filename = f"sync-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
         log_path = log_dir / log_filename
-        
+
+        # Execute sync
+        runner = get_runner()
+
         run = Run(
             status="running",
             log_path=str(log_path)
@@ -209,20 +226,18 @@ def sync_job() -> None:
         db.refresh(run)
         
         logger.info(f"Created sync run {run.id}")
-        
-        # Execute sync
-        runner = get_runner()
-        
+
         # Set current run info for live monitoring
         runner.set_current_run(run.id, str(log_path))
-        
+
         try:
             result = runner.run_sync(
                 gdrive_remote=sync_config["gdrive_remote"],
-                gdrive_src=sync_config["gdrive_src"],
+                gdrive_src=sync_paths_src,
                 nc_remote=sync_config["nc_remote"],
-                nc_dest_path=sync_config["nc_dest_path"],
-                dry_run=False
+                nc_dest_path=sync_paths_dest,
+                dry_run=False,
+                performance_snapshot=perf_snapshot,
             )
         finally:
             # Clear current run info when done
