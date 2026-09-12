@@ -888,7 +888,6 @@ def run_health_checks(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
         ("API Health", "http://127.0.0.1:8787/health"),
         ("API Status", "http://127.0.0.1:8787/status"),
         ("UI", "http://127.0.0.1:8501"),
-        ("File Tree", "http://127.0.0.1:8787/tree"),
     ]
 
     checks: List[Tuple[str, bool, str]] = []

@@ -2,7 +2,7 @@
 
 **Production-ready automated sync system: Google Drive → Nextcloud**
 
-A comprehensive web-based administration system for managing one-way synchronization from Google Drive to Nextcloud using rclone, featuring real-time monitoring, file tree visualization, guided setup, and secure remote access.
+A comprehensive web-based administration system for managing one-way synchronization from Google Drive to Nextcloud using rclone, featuring real-time monitoring, guided setup, and secure remote access.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
@@ -15,7 +15,6 @@ A comprehensive web-based administration system for managing one-way synchroniza
 ### Core Functionality
 - 🔄 **One-way Sync**: Google Drive → Nextcloud (incremental, new/modified files only)
 - ⏱️ **Automated Scheduling**: Configurable intervals (1-5 minutes) with intelligent jitter
-- 🌳 **File Tree Visualization**: Hierarchical display with real-time sync status per file/folder
 - 🧙‍♂️ **Guided Setup Wizard**: Step-by-step configuration with validation and testing
 - 📊 **Real-time Monitoring**: Live dashboard with statistics, history, and event logging
 - 🔒 **Conflict Resolution**: Automatic file renaming with `-conflict(n)` suffix
@@ -163,7 +162,6 @@ sudo bash ops/scripts/setup-cloudflare-tunnel.sh
 - **Settings**: Configuration management, performance tuning
 - **Runs & Events**: Sync history, file events, log access
 - **Setup Wizard**: Guided configuration for first-time users
-- **File Tree**: Hierarchical file visualization with sync status
 
 ### API Endpoints
 
@@ -181,9 +179,6 @@ POST /runs
 
 # List runs
 GET /runs?limit=10
-
-# Get file tree
-GET /tree
 
 # Browse folders
 GET /browse/folders/{remote}?path=
@@ -388,7 +383,6 @@ sqlite3 /srv/mascloner/data/mascloner.db "SELECT COUNT(*) FROM runs;"
 │   │   ├── schemas.py               # Pydantic schemas
 │   │   ├── scheduler.py             # Job scheduling
 │   │   ├── rclone_runner.py         # rclone execution
-│   │   ├── tree_builder.py          # File tree
 │   │   └── routers/                 # API routes
 │   └── ui/                          # Streamlit frontend
 │       ├── Home.py                  # Dashboard

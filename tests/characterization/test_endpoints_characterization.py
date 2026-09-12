@@ -91,3 +91,15 @@ def test_browse_and_size_estimation_endpoints(fresh_client: TestClient, isolated
     assert size_data["success"] is True
     assert size_data["file_count"] >= 0
     assert size_data["size_mb"] >= 0
+
+
+def test_retired_tree_endpoint_returns_404(fresh_client: TestClient):
+    """Verify ADR 0002: direct requests to the retired /tree route receive 404 Not Found."""
+    res_root = fresh_client.get("/tree")
+    assert res_root.status_code == 404
+
+    res_subpath = fresh_client.get("/tree?path=subfolder")
+    assert res_subpath.status_code == 404
+
+    res_status = fresh_client.get("/tree/status/subfolder")
+    assert res_status.status_code == 404

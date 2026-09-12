@@ -1,6 +1,6 @@
 """Route collections for the MasCloner API."""
 
-from . import browse, config, google_drive, maintenance, nextcloud, runs, schedule, tree
+from . import browse, config, google_drive, maintenance, nextcloud, runs, schedule
 
 __all__ = [
     "browse",
@@ -10,5 +10,4 @@ __all__ = [
     "nextcloud",
     "runs",
     "schedule",
-    "tree",
 ]

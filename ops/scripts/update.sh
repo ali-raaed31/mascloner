@@ -532,13 +532,6 @@ run_health_check() {
             echo_warning "Database connectivity may have issues"
         fi
         
-        # Test file tree endpoint
-        if curl -s -f --max-time 10 "http://127.0.0.1:8787/tree" >/dev/null; then
-            echo_success "File tree endpoint is working"
-        else
-            echo_warning "File tree endpoint may have issues"
-        fi
-        
         # Test scheduler control endpoints (NEW)
         if curl -s -f --max-time 10 "http://127.0.0.1:8787/schedule" >/dev/null; then
             echo_success "Scheduler endpoints are working"

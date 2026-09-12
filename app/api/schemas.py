@@ -1,4 +1,4 @@
-"""Pydantic data models for the MasCloner API."""
+"""Pydantic schemas for API requests and responses."""
 
 from __future__ import annotations
 
@@ -7,59 +7,59 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-class ConfigRequest(BaseModel):
-    """Request model for configuration updates."""
+class StatusResponse(BaseModel):
+    """Response model for system status."""
 
-    gdrive_remote: str = Field(..., description="Google Drive remote name")
-    gdrive_src: str = Field(..., description="Google Drive source path")
-    nc_remote: str = Field(..., description="Nextcloud remote name")
-    nc_dest_path: str = Field(..., description="Nextcloud destination path")
+    last_run: Optional[Dict[str, Any]]
+    last_sync: Optional[str]
+    next_run: Optional[str]
+    scheduler_running: bool
+    database_ok: bool
+    total_runs: int
+    config_valid: bool
+    remotes_configured: Dict[str, bool]
+
+
+class ConfigRequest(BaseModel):
+    """Request model for updating sync configuration."""
+
+    gdrive_remote: str
+    gdrive_src: str
+    nc_remote: str
+    nc_dest_path: str
 
 
 class ScheduleRequest(BaseModel):
-    """Request model for schedule updates."""
+    """Request model for updating schedule configuration."""
 
-    interval_min: int = Field(ge=1, le=1440, description="Sync interval in minutes")
-    jitter_sec: int = Field(ge=0, le=3600, default=20, description="Jitter in seconds")
+    interval_min: int = Field(..., ge=1, le=1440)
+    jitter_sec: int = Field(..., ge=0, le=300)
 
 
 class RunResponse(BaseModel):
-    """Response model for run information."""
+    """Response model for a sync run."""
 
     id: int
     status: str
     started_at: str
-    finished_at: Optional[str] = None
-    num_added: int = 0
-    num_updated: int = 0
-    bytes_transferred: int = 0
-    errors: int = 0
-    log_path: Optional[str] = None
+    finished_at: Optional[str]
+    num_added: int
+    num_updated: int
+    bytes_transferred: int
+    errors: int
+    log_path: Optional[str]
 
 
 class FileEventResponse(BaseModel):
-    """Response model for file events."""
+    """Response model for a file event."""
 
     id: int
     timestamp: str
     action: str
     file_path: str
     file_size: int
-    file_hash: Optional[str] = None
-    message: Optional[str] = None
-
-
-class StatusResponse(BaseModel):
-    """Response model for system status."""
-
-    last_run: Optional[Dict[str, Any]] = None
-    last_sync: Optional[str] = None
-    next_run: Optional[str] = None
-    scheduler_running: bool
-    database_ok: bool
-    total_runs: int = 0
-    config_valid: bool = False
-    remotes_configured: Dict[str, bool] = {}
+    file_hash: Optional[str]
+    message: Optional[str]
 
 
 class ApiResponse(BaseModel):
@@ -71,12 +71,12 @@ class ApiResponse(BaseModel):
 
 
 class RcloneConfigRequest(BaseModel):
-    """Request model for rclone performance configuration."""
+    """Request model for updating rclone performance settings."""
 
-    transfers: int = Field(..., ge=1, le=64, description="Concurrent file transfers")
-    checkers: int = Field(..., ge=1, le=128, description="Concurrent verification workers")
-    tpslimit: int = Field(..., ge=1, le=1000, description="Requests-per-second cap")
-    tpslimit_burst: int = Field(..., ge=1, le=2000, description="Burst allowance for pacer")
+    transfers: int = Field(..., ge=1, le=64, description="Number of parallel file transfers")
+    checkers: int = Field(..., ge=1, le=128, description="Number of parallel checkers")
+    tpslimit: int = Field(..., ge=1, le=1000, description="Transaction limit per second")
+    tpslimit_burst: int = Field(..., ge=0, le=1000, description="Transaction limit burst")
     buffer_size: Optional[str] = Field(None, description="Buffer size per transfer (e.g. 32Mi)")
     drive_chunk_size: Optional[str] = Field(None, description="Google Drive chunk size (e.g. 64M)")
     drive_upload_cutoff: Optional[str] = Field(None, description="Threshold for chunked uploads (e.g. 128M)")
@@ -102,22 +102,6 @@ class GoogleDriveStatusResponse(BaseModel):
     last_test: Optional[str] = None
 
 
-class TreeNodeResponse(BaseModel):
-    """Response model for a single tree node within the file tree."""
-
-    path: str
-    name: str
-    type: str
-    size: Optional[int] = None
-    children: Optional[List["TreeNodeResponse"]] = None
-
-
-class TreeResponse(BaseModel):
-    """Response model for the entire file tree."""
-
-    root: TreeNodeResponse
-
-
 class WebDAVTestRequest(BaseModel):
     """Request model for WebDAV connection testing."""
 
@@ -132,9 +116,3 @@ class GoogleDriveOAuthConfigRequest(BaseModel):
 
     client_id: str = Field(..., description="Google OAuth Client ID")
     client_secret: str = Field(..., description="Google OAuth Client Secret")
-
-
-try:  # Pydantic v2
-    TreeNodeResponse.model_rebuild()
-except AttributeError:  # Pydantic v1 fallback
-    TreeNodeResponse.update_forward_refs()

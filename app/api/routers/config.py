@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["config"])
 
 
+@router.get("/health", response_model=Dict[str, str])
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "service": "mascloner-api"}
+
+
 def _persist_env_updates(updates: Dict[str, Optional[str]]) -> Path:
     """Write environment variable updates to the installation .env file."""
     if not config:
@@ -64,21 +70,15 @@ def _persist_env_updates(updates: Dict[str, Optional[str]]) -> Path:
             continue
 
         value = updates[key]
+        if value is not None:
+            updated_lines.append(f"{key}={value}")
         handled[key] = True
-        if value is None:
-            continue  # Remove line when value cleared
-        updated_lines.append(f"{key}={value}")
 
     for key, value in updates.items():
-        if handled.get(key) or value is None:
-            continue
-        updated_lines.append(f"{key}={value}")
+        if not handled[key] and value is not None:
+            updated_lines.append(f"{key}={value}")
 
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    content = "\n".join(updated_lines)
-    if content and not content.endswith("\n"):
-        content = f"{content}\n"
-
+    content = "\n".join(updated_lines) + "\n"
     try:
         with env_path.open("w", encoding="utf-8") as env_file:
             env_file.write(content)
@@ -243,8 +243,8 @@ async def update_rclone_config(
     def _clean(value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        trimmed = value.strip()
-        return trimmed or None
+        stripped = value.strip()
+        return stripped if stripped else None
 
     updates = {
         "RCLONE_TRANSFERS": str(settings.transfers),
@@ -254,9 +254,8 @@ async def update_rclone_config(
         "RCLONE_BUFFER_SIZE": _clean(settings.buffer_size),
         "RCLONE_DRIVE_CHUNK_SIZE": _clean(settings.drive_chunk_size),
         "RCLONE_DRIVE_UPLOAD_CUTOFF": _clean(settings.drive_upload_cutoff),
-        "RCLONE_FAST_LIST": "1" if settings.fast_list else "0",
+        "RCLONE_FAST_LIST": "true" if settings.fast_list else "false",
     }
-
     _persist_env_updates(updates)
 
     # Refresh in-memory configuration for subsequent runs

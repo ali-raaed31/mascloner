@@ -148,15 +148,6 @@ class APIClient:
         """Get recent file events."""
         return self._make_request("GET", f"/events?limit={limit}")
 
-    def get_tree(self, path: str = "") -> Optional[Dict[str, Any]]:
-        """Get file tree structure."""
-        params = {"path": path} if path else {}
-        return self._make_request("GET", "/tree", params=params)
-
-    def get_tree_status(self, path: str) -> Optional[Dict[str, Any]]:
-        """Get status for specific path."""
-        return self._make_request("GET", f"/tree/status/{path}")
-
     def test_gdrive(self, remote_name: str) -> Optional[Dict[str, Any]]:
         """Test Google Drive connection."""
         return self._make_request("POST", "/test/gdrive", json={"remote_name": remote_name})
@@ -181,62 +172,57 @@ class APIClient:
         return self._make_request("GET", f"/browse/folders/{remote_name}", params=params)
 
     def estimate_size(self, source: str, dest: str) -> Optional[Dict[str, Any]]:
-        """Estimate sync operation size."""
-        return self._make_request(
-            "GET", "/estimate/size", params={"source": source, "dest": dest}
-        )
+        """Estimate sync size."""
+        params = {"source": source, "dest": dest}
+        return self._make_request("GET", "/estimate/size", params=params)
 
     def cleanup_database(self, keep_runs: int = 100) -> Optional[Dict[str, Any]]:
-        """Clean up old database records."""
-        return self._make_request(
-            "POST", "/maintenance/cleanup", params={"keep_runs": keep_runs}
-        )
+        """Clean up old runs."""
+        params = {"keep_runs": keep_runs}
+        return self._make_request("POST", "/maintenance/cleanup", params=params)
 
     def reset_database(self) -> Optional[Dict[str, Any]]:
-        """Reset database by deleting all runs and file events."""
+        """Reset database (delete all runs and events)."""
         return self._make_request("POST", "/maintenance/reset")
 
     def get_database_info(self) -> Optional[Dict[str, Any]]:
         """Get database information."""
         return self._make_request("GET", "/database/info")
 
-    # Google Drive OAuth methods
-    def configure_google_drive_oauth(
+    def get_gdrive_oauth_config(self) -> Optional[Dict[str, Any]]:
+        """Get Google Drive OAuth client configuration."""
+        return self._make_request("GET", "/oauth/google-drive/oauth-config")
+
+    def save_gdrive_oauth_config(
+        self, client_id: str, client_secret: str
+    ) -> Optional[Dict[str, Any]]:
+        """Save Google Drive custom OAuth client credentials."""
+        return self._make_request(
+            "POST",
+            "/oauth/google-drive/oauth-config",
+            json={"client_id": client_id, "client_secret": client_secret},
+        )
+
+    def configure_gdrive_oauth(
         self,
         token: str,
         scope: str = "drive.readonly",
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Configure Google Drive using OAuth token."""
-        data: Dict[str, Any] = {"token": token, "scope": scope}
+        """Configure Google Drive with OAuth token."""
+        data = {"token": token, "scope": scope}
         if client_id:
             data["client_id"] = client_id
         if client_secret:
             data["client_secret"] = client_secret
-
         return self._make_request("POST", "/oauth/google-drive", json=data)
 
-    def get_google_drive_status(self) -> Optional[Dict[str, Any]]:
+    def get_gdrive_status(self) -> Optional[Dict[str, Any]]:
         """Get Google Drive configuration status."""
         return self._make_request("GET", "/oauth/google-drive/status")
 
-    def get_google_drive_oauth_config(self) -> Optional[Dict[str, Any]]:
-        """Get Google Drive OAuth configuration status."""
-        return self._make_request("GET", "/oauth/google-drive/oauth-config")
-
-    def save_google_drive_oauth_config(
-        self, client_id: str, client_secret: str
-    ) -> Optional[Dict[str, Any]]:
-        """Save Google Drive OAuth configuration."""
-        data = {"client_id": client_id, "client_secret": client_secret}
-        return self._make_request("POST", "/oauth/google-drive/oauth-config", json=data)
-
-    def test_google_drive_connection(self) -> Optional[Dict[str, Any]]:
-        """Test Google Drive connection."""
-        return self._make_request("POST", "/oauth/google-drive/test")
-
-    def remove_google_drive_config(self) -> Optional[Dict[str, Any]]:
+    def remove_gdrive_config(self) -> Optional[Dict[str, Any]]:
         """Remove Google Drive configuration."""
         return self._make_request("DELETE", "/oauth/google-drive")
 

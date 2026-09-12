@@ -602,8 +602,7 @@ with tab4:
         st.markdown("""
         **What this does:**
         - Deletes ALL sync run records
-        - Deletes ALL file event records  
-        - Clears the file tree completely
+        - Deletes ALL file event records
         - Resets all sync history
         
         **What this does NOT affect:**
