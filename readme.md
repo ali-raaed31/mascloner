@@ -25,7 +25,7 @@ A comprehensive web-based administration system for managing one-way synchroniza
 - 📡 **RESTful API**: Complete FastAPI backend with OpenAPI documentation
 - 💾 **Persistent Storage**: SQLite database for configuration, run history, and events
 - 📈 **Performance Tuning**: Configurable parallelism, bandwidth limits, and transfer optimization
-- 🔐 **Security**: Fernet encryption, hardened systemd services, least-privilege user model
+- 🔐 **Security**: Restricted configuration files, hardened systemd services, least-privilege user model
 - 🚀 **Production Ready**: One-command installation, automated updates, comprehensive monitoring
 - 📝 **Comprehensive Logging**: JSON-structured logs with rotation and archival
 
@@ -95,72 +95,38 @@ sudo bash ops/scripts/install.sh
 - ✅ Creates dedicated `mascloner` system user
 - ✅ Sets up `/srv/mascloner` directory
 - ✅ Installs Python dependencies in virtual environment
-- ✅ Initializes database with encryption
+- ✅ Initializes the SQLite database and legacy-compatible Fernet bootstrap key
 - ✅ Installs and starts systemd services
 - ✅ Configures firewall and log rotation
 ### Post-Installation Configuration
 
 #### 1. Configure Google Drive
 
-2. **Configure OAuth Consent Screen:**
+1. **Configure the OAuth consent screen:**
    - Choose "Internal" (for Google Workspace) or "External" and publish the app
    - Add the Google Drive API scope you intend to use; we recommend read-only: `https://www.googleapis.com/auth/drive.readonly`
    - Set developer contact information
-# Via Setup Wizard UI or manually:
-4. **Save your OAuth credentials:**
-   - Preferred: Open the web UI → Setup Wizard → Google Drive → enter Client ID and Client Secret → Save. The API encrypts and hot-reloads them (no service restart needed).
-   - Optional (manual): Add to `/srv/mascloner/.env` and ensure file perms are 600. If you edit the file directly, restart services:
-     ```bash
-     sudo systemctl restart mascloner-api mascloner-ui
-     ```
-For Google Workspace admins, using custom OAuth credentials provides dedicated API quotas instead of shared rclone defaults:
-5. **Authorize and connect (token flow):**
+
+2. **Create OAuth credentials:**
+   - Create a Desktop application OAuth client in Google Cloud Console.
+   - Save its Client ID and Client Secret through **Setup Wizard → Google Drive**. Do not edit MasCloner's managed `.env` or `rclone.conf` directly.
+
+3. **Authorize and connect:**
    - On any machine with a browser, run one of the following to generate a token (then copy the JSON):
      ```bash
-     # If Client ID/Secret are saved in the API/UI or exported in your shell
      rclone authorize "drive"
 
-     # Or explicitly pass your credentials
      rclone authorize "drive" "your_client_id" "your_client_secret"
      ```
-   - Paste the token JSON into the Setup Wizard and click “Create rclone config”. The backend will create/update the `gdrive` remote.
+   - This command runs away from MasCloner's managed configuration; it only produces the token that you paste into the Setup Wizard.
+   - Paste the token JSON into the Setup Wizard and configure the fixed `gdrive` remote.
 
    Notes:
    - The token should include a refresh_token for long-lived access. If missing, publish your app or use Internal (Workspace) and re-authorize.
    - Remote creation can take up to ~90 seconds; if you see a temporary 504 timeout, wait a moment and check the Google Drive test again or retry.
+   - Do not run mutating `rclone config`, `config update`, `config reconnect`, or `config delete` commands against `/srv/mascloner/etc/rclone.conf`.
 
 For more details and troubleshooting, see `docs/google_oauth_notes.md`.
-   - Go to [Google Cloud Console](https://console.developers.google.com/)
-   - Create new project or select existing
-   - Enable Google Drive API
-
-2. **Configure OAuth Consent Screen:**
-   - Choose "Internal" (for Google Workspace)
-   - Add required scopes: `drive`, `drive.metadata.readonly`, `docs`
-   - Set developer contact information
-
-3. **Create OAuth Credentials:**
-   - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
-
-4. **Set Environment Variables:**
-   GDRIVE_OAUTH_CLIENT_ID="your_client_id_here"
-   GDRIVE_OAUTH_CLIENT_SECRET="your_client_secret_here"
-   
-   # Restart services
-   sudo systemctl restart mascloner-api mascloner-scheduler
-   ```
-
-5. **Use Custom OAuth:**
-   ```bash
-   # The setup wizard will automatically detect and use custom credentials
-   # Since credentials are in environment variables, use the simple command:
-   rclone authorize "drive"
-   
-   # Or explicitly specify credentials (optional):
-   rclone authorize "drive" "your_client_id" "your_client_secret"
-   ```
-
-**Security Note:** Credentials are automatically encrypted using the system's Fernet key and stored securely.
 
 #### 2. Configure Nextcloud
 
@@ -276,6 +242,8 @@ sudo bash /srv/mascloner/ops/scripts/backup.sh
 ls -la /var/backups/mascloner/
 ```
 
+Do not rely on backups stored on the same VM disk for disaster recovery. Keep a protected off-disk copy or scheduled Google Compute Engine snapshot and test restoration periodically.
+
 ### Updates
 
 ```bash
@@ -283,11 +251,17 @@ ls -la /var/backups/mascloner/
 sudo bash /srv/mascloner/ops/scripts/update.sh
 ```
 
+### Accepted Architecture Migration
+
+The accepted configuration ownership and lifecycle changes are documented in [`docs/adr/`](docs/adr/) and [`docs/configuration-migration.md`](docs/configuration-migration.md). The migration document describes target behavior that must be implemented and verified before it is assumed to be active on an existing installation.
+
 ---
 
 ## ⚙️ Performance Tuning (Long Runs)
 
 For large syncs (e.g., 96+ GB, many files), you can safely tune rclone and MasCloner behavior using environment variables:
+
+> This describes the current release. The accepted configuration migration moves mutable performance settings to SQLite and the MasCloner UI.
 
 - RCLONE_TRANSFERS: number of concurrent file transfers (default 4). Increase cautiously if CPU/network allows.
 - RCLONE_CHECKERS: parallel checkers for listing/comparison (default 8). Lower if Drive/WebDAV rate-limits.
@@ -333,7 +307,7 @@ Notes:
 
 ### Features
 
-- **🔐 Encryption**: Fernet encryption for all sensitive data
+- **🔐 Restricted secrets**: Managed configuration and environment files use owner-only permissions
 - **👤 User Isolation**: Dedicated `mascloner` system user
 - **🔒 File Permissions**: Secure permissions (0600 for secrets)
 - **🌐 Cloudflare Tunnel**: Zero exposed ports, Zero Trust auth
@@ -361,10 +335,8 @@ sudo systemctl restart mascloner-api
 ```
 
 **rclone Authentication Errors**
-```bash
-sudo -u mascloner rclone config reconnect gdrive
-sudo -u mascloner rclone lsd gdrive:
-```
+
+Use **Setup Wizard → Google Drive → Re-authenticate** and paste a newly generated authorization token. Do not mutate MasCloner's managed rclone configuration with direct CLI commands. If re-authentication fails, inspect `journalctl -u mascloner-api -n 100` and preserve the existing configuration for rollback.
 
 **Sync Not Running**
 ```bash
