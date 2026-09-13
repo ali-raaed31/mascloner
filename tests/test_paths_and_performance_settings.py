@@ -25,7 +25,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.models import Base, ConfigKV
-from app.api.rclone_runner import RcloneRunner
+from app.execution.command_builder import RcloneCommandBuilder
 from app.configuration import Configuration, RclonePerformanceSettings, SyncPathsSettings
 from tests.harness.installation import InstallationRoot
 
@@ -190,23 +190,21 @@ def test_field_level_validation_errors_and_no_secrets(fresh_client: TestClient):
 
 def test_immutable_settings_snapshot_isolation(isolated_fresh_install: InstallationRoot):
     """A run uses one immutable settings snapshot even if settings are changed while it executes."""
-    runner = RcloneRunner()
-
     # Initial snapshot
     initial_perf = RclonePerformanceSettings(transfers=4, checkers=8, tpslimit=10)
     initial_paths = SyncPathsSettings(gdrive_src="initial/src", nc_dest_path="initial/dest")
 
     # Build command using the initial snapshot
-    cmd1 = runner.build_rclone_command(
-        src=initial_paths.gdrive_src,
-        dest=initial_paths.nc_dest_path,
-        log_file="/tmp/test.log",
-        performance_snapshot=initial_perf,
+    cmd1 = RcloneCommandBuilder.build_sync_command(
+        paths=initial_paths,
+        perf=initial_perf,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+        log_file_path=Path("/tmp/test.log"),
     )
     assert "--transfers=4" in cmd1
     assert "--checkers=8" in cmd1
-    assert "initial/src" in cmd1
-    assert "initial/dest" in cmd1
+    assert "gdrive:initial/src" in cmd1
+    assert "ncwebdav:initial/dest" in cmd1
 
     # Mutate settings in the middle of execution
     mutated_perf = RclonePerformanceSettings(transfers=16, checkers=32, tpslimit=50)
@@ -218,29 +216,24 @@ def test_immutable_settings_snapshot_isolation(isolated_fresh_install: Installat
     assert "--transfers=16" not in cmd1
 
     # Subsequent run uses the new snapshot
-    cmd2 = runner.build_rclone_command(
-        src=mutated_paths.gdrive_src,
-        dest=mutated_paths.nc_dest_path,
-        log_file="/tmp/test.log",
-        performance_snapshot=mutated_perf,
+    cmd2 = RcloneCommandBuilder.build_sync_command(
+        paths=mutated_paths,
+        perf=mutated_perf,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+        log_file_path=Path("/tmp/test.log"),
     )
     assert "--transfers=16" in cmd2
     assert "--checkers=32" in cmd2
-    assert "mutated/src" in cmd2
-    assert "mutated/dest" in cmd2
+    assert "gdrive:mutated/src" in cmd2
+    assert "ncwebdav:mutated/dest" in cmd2
 
 
 def test_active_run_mutation_determinism(
     fresh_client: TestClient, isolated_fresh_install: InstallationRoot
 ):
     """Mutating settings during an active run updates SQLite for subsequent runs while active run maintains snapshot."""
-    from app.api.dependencies import get_runner
-
-    runner = fresh_client.app.dependency_overrides.get(get_runner, get_runner)()
-
-    # Simulate active run starting with snapshot
-    runner.set_current_run(101, "/tmp/active_run.log")
     initial_perf = RclonePerformanceSettings(transfers=6, checkers=12, tpslimit=15)
+    initial_paths = SyncPathsSettings(gdrive_src="src", nc_dest_path="dest")
 
     # Mid-run mutation via API
     res = fresh_client.post(
@@ -250,17 +243,31 @@ def test_active_run_mutation_determinism(
     assert res.status_code == 200
 
     # Active run still uses its snapshot
-    active_cmd = runner.build_rclone_command(
-        "src", "dest", "/tmp/active_run.log", performance_snapshot=initial_perf
+    active_cmd = RcloneCommandBuilder.build_sync_command(
+        paths=initial_paths,
+        perf=initial_perf,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+        log_file_path=Path("/tmp/active_run.log"),
     )
     assert "--transfers=6" in active_cmd
     assert "--transfers=16" not in active_cmd
 
-    # Clean up active run
-    runner.clear_current_run()
+    # Subsequent run without snapshot uses updated settings from SQLite
+    cfg = Configuration(
+        base_dir=isolated_fresh_install.base_dir,
+        env_path=isolated_fresh_install.root_env_path,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+    )
+    new_perf = cfg.get_performance()
+    assert new_perf.transfers == 16
+    assert new_perf.checkers == 32
 
-    # Subsequent run without snapshot uses updated runner config
-    next_cmd = runner.build_rclone_command("src", "dest", "/tmp/next_run.log")
+    next_cmd = RcloneCommandBuilder.build_sync_command(
+        paths=initial_paths,
+        perf=new_perf,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+        log_file_path=Path("/tmp/next_run.log"),
+    )
     assert "--transfers=16" in next_cmd
     assert "--checkers=32" in next_cmd
 

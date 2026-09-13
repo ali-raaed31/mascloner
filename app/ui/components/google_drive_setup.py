@@ -232,18 +232,7 @@ class GoogleDriveSetup:
                 else:
                     st.error(f"❌ Connection failed: {result.get('error', 'Unknown error')}")
         
-        with st.expander("⚙️ Run Interactive Setup Script"):
-            st.markdown("""
-            **For advanced users only.** This runs the command-line setup script:
-            """)
-            
-            if st.button("🖥️ Run Setup Script"):
-                st.info("🔄 Running setup script... Check the server logs for progress.")
-                result = self._run_setup_script()
-                if result["success"]:
-                    st.success("✅ Setup script completed successfully!")
-                else:
-                    st.error(f"❌ Setup script failed: {result.get('error', 'Unknown error')}")
+
         
         return False
     
@@ -365,18 +354,7 @@ class GoogleDriveSetup:
         except Exception:
             return False
     
-    def _run_setup_script(self) -> Dict[str, Any]:
-        """Run the setup script"""
-        try:
-            script_path = f"{self.install_dir}/../ops/scripts/oauth/setup-google-drive.sh"
-            cmd = ["bash", script_path]
-            
-            # This would need to be run asynchronously and show progress
-            # For now, just return a placeholder
-            return {"success": True, "message": "Script execution started"}
-            
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+
 
     def _render_reauth_flow(self):
         """Render the re-authentication flow for Google Drive."""

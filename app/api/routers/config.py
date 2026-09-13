@@ -16,9 +16,8 @@ from pydantic import ValidationError
 from ...configuration import Configuration, RclonePerformanceSettings, SyncPathsSettings, ConfigurationValidationError
 from ..config import config, ConfigManager
 from ..db import get_db, get_db_info
-from ..dependencies import get_config, get_runner, get_scheduler, get_configuration
+from ..dependencies import get_config, get_scheduler, get_configuration
 from ..models import ConfigKV, Run
-from ..rclone_runner import RcloneRunner
 from ..scheduler import SyncScheduler, get_sync_config_from_db
 from ..schemas import ApiResponse, ConfigRequest, RcloneConfigRequest, StatusResponse
 
@@ -225,7 +224,6 @@ async def get_rclone_config_settings(
 async def update_rclone_config(
     settings: RcloneConfigRequest,
     cfg_module: Configuration = Depends(get_configuration),
-    runner: RcloneRunner = Depends(get_runner),
 ):
     """Persist updated rclone performance settings to SQLite without writing to .env."""
     try:
@@ -240,9 +238,6 @@ async def update_rclone_config(
             fast_list=settings.fast_list,
         )
         cfg_module.set_performance(perf_settings)
-
-        # Refresh in-memory runner configuration for subsequent runs
-        runner.rclone_config.update(perf_settings.model_dump())
 
         return ApiResponse(
             success=True,

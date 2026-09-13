@@ -223,31 +223,18 @@ def test_sync_job_does_not_hold_db_transaction_across_rclone(
 
     transaction_open_during_rclone = False
 
-    orig_run_sync = scheduler.get_runner().run_sync
-
-    def mock_run_sync(*args, **kwargs):
+    def mock_popen(*args, **kwargs):
         nonlocal transaction_open_during_rclone
-        # Check if there are active transactions on the database engine
-        # SQLite in WAL mode allows checking if connection has an in-progress transaction
-        # Or check if any open thread session is active
-        return MagicMock(
-            status="completed",
-            num_added=0,
-            num_updated=0,
-            bytes_transferred=0,
-            errors=0,
-            events=[],
-        )
+        # During rclone subprocess execution, verify no open transactions
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        proc.stdout.readline.return_value = ""
+        proc.wait.return_value = 0
+        proc.returncode = 0
+        return proc
 
-    with patch.object(scheduler.get_runner(), "run_sync", side_effect=mock_run_sync):
-        with patch.object(scheduler, "validate_sync_config", return_value=(True, [])):
-            with patch.object(scheduler, "get_sync_config_from_db", return_value={
-                "gdrive_remote": "gdrive",
-                "gdrive_src": "src",
-                "nc_remote": "ncwebdav",
-                "nc_dest_path": "dest",
-            }):
-                scheduler.sync_job()
+    with patch("subprocess.Popen", side_effect=mock_popen):
+        res = scheduler.sync_job(wait=True)
 
     assert transaction_open_during_rclone is False
 

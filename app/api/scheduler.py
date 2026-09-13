@@ -17,8 +17,6 @@ from sqlalchemy.orm import Session
 from .config import config, get_log_dir
 from .db import get_db_session
 from .models import Run, FileEvent, ConfigKV, SyncStatus
-from .rclone_runner import get_runner, SyncResult
-
 logger = logging.getLogger(__name__)
 
 # Global scheduler instance
@@ -32,15 +30,6 @@ class SyncScheduler:
     def __init__(self) -> None:
         self.scheduler = scheduler
 
-    @property
-    def runner(self):
-        from .rclone_runner import get_runner
-        return getattr(self, "_runner", None) or get_runner()
-
-    @runner.setter
-    def runner(self, value):
-        self._runner = value
-    
     def start(self) -> None:
         """Start the scheduler."""
         if not self.scheduler.running:

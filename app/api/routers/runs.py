@@ -13,10 +13,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..dependencies import get_runner
 from ..exceptions import DatabaseError, NotFoundError, SchedulerError
 from ..models import FileEvent, Run, SyncStatus
-from ..rclone_runner import RcloneRunner
 from ..schemas import ApiResponse, FileEventResponse, RunResponse
 from ...execution import SyncExecutor
 
@@ -65,7 +63,6 @@ async def get_runs(
 @router.get("/current")
 async def get_current_run(
     db: Session = Depends(get_db),
-    runner: RcloneRunner = Depends(get_runner),
 ) -> Optional[Dict[str, Any]]:
     """Get currently running sync if any.
 
@@ -104,9 +101,6 @@ async def get_current_run(
         if not current_run:
             return None
 
-        # Get additional info from runner if available
-        runner_info = runner.get_current_run_info()
-
         return {
             "id": current_run.id,
             "status": current_run.status,
@@ -116,9 +110,7 @@ async def get_current_run(
             "bytes_transferred": current_run.bytes_transferred,
             "errors": current_run.errors,
             "log_path": current_run.log_path,
-            "is_process_running": (
-                runner_info.get("is_running", False) if runner_info else False
-            ),
+            "is_process_running": False,
         }
     except Exception as exc:
         logger.error("Failed to get current run: %s", exc)
@@ -131,7 +123,6 @@ async def get_run_logs(
     since: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    runner: RcloneRunner = Depends(get_runner),
 ) -> Dict[str, Any]:
     """Get log lines for a running or completed sync."""
     try:
@@ -141,27 +132,6 @@ async def get_run_logs(
             raise NotFoundError("Run", run_id)
 
         executor = SyncExecutor.get_instance()
-        if executor.get_active_run_id() == run_id:
-            logs, next_line, is_live = executor.tail_log_file(run_id, since_line=since, limit=limit)
-            return {
-                "run_id": run_id,
-                "logs": logs,
-                "next_line": next_line,
-                "is_live": is_live,
-            }
-
-        # Check if active in legacy runner
-        runner_info = runner.get_current_run_info()
-        if runner_info and runner_info.get("run_id") == run_id:
-            logs, next_line = runner.tail_log_file(since_line=since, limit=limit)
-            return {
-                "run_id": run_id,
-                "logs": logs,
-                "next_line": next_line,
-                "is_live": True,
-            }
-
-        # Read completed log file via executor helper
         logs, next_line, is_live = executor.tail_log_file(run_id, since_line=since, limit=limit)
         return {
             "run_id": run_id,
@@ -180,7 +150,6 @@ async def get_run_logs(
 async def stop_run(
     run_id: int,
     db: Session = Depends(get_db),
-    runner: RcloneRunner = Depends(get_runner),
 ) -> Dict[str, Any]:
     """Request graceful stop of a running sync."""
     try:
@@ -208,16 +177,6 @@ async def stop_run(
                 status_code=400,
                 detail=abort_res.message,
             )
-
-        # Fallback to legacy runner stop
-        runner_info = runner.get_current_run_info()
-        if runner_info and runner_info.get("run_id") == run_id:
-            if runner.request_stop():
-                return {
-                    "success": True,
-                    "message": "Stop requested - rclone will finish current file and exit",
-                    "run_id": run_id,
-                }
 
         raise HTTPException(
             status_code=400,

@@ -153,29 +153,6 @@ def test_client(test_session, mock_config_manager) -> Generator[TestClient, None
 
 
 @pytest.fixture
-def mock_rclone_runner():
-    """Mock RcloneRunner for tests."""
-    with patch("app.api.dependencies.get_runner") as mock_get_runner:
-        mock_instance = MagicMock()
-        mock_get_runner.return_value = mock_instance
-
-        mock_instance.test_connection.return_value = (True, "Connection successful")
-        mock_instance.test_connection_async.return_value = (True, "Connection successful")
-        mock_instance.list_folders.return_value = ["folder1", "folder2"]
-        mock_instance.list_folders_async.return_value = ["folder1", "folder2"]
-        mock_instance.run_sync.return_value = MagicMock(
-            status="success",
-            num_added=5,
-            num_updated=2,
-            bytes_transferred=1024000,
-            errors=0,
-            events=[],
-        )
-
-        yield mock_instance
-
-
-@pytest.fixture
 def mock_subprocess():
     """Mock subprocess.run for tests."""
     with patch("subprocess.run") as mock_run:

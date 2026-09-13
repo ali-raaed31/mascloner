@@ -184,7 +184,15 @@ class SqliteStoreAdapter:
         self.session_factory = session_factory
         self.fallback_env_adapter = fallback_env_adapter
 
-    def _fallback(self, key: str, default: str) -> str:
+    def is_cutover_complete(self, session: Session) -> bool:
+        """Check whether the instance has completed migration to v3 cutover (ADR 0001, Issue #15)."""
+        v = self._get_kv("migration_version", session)
+        return bool(v)
+
+    def _fallback(self, key: str, default: str, session: Optional[Session] = None) -> str:
+        # After cutover marker is present, legacy .env fallback reads are disabled
+        if session is not None and self.is_cutover_complete(session):
+            return default
         if self.fallback_env_adapter:
             val = self.fallback_env_adapter.get_val(key)
             if val is not None:
@@ -209,8 +217,8 @@ class SqliteStoreAdapter:
     def load_schedule(self) -> ScheduleSettings:
         with self.session_factory() as session:
             enabled_val = self._get_kv("schedule_enabled", session)
-            interval_val = self._get_kv("interval_min", session) or self._fallback("SYNC_INTERVAL_MIN", "5")
-            jitter_val = self._get_kv("jitter_sec", session) or self._fallback("SYNC_JITTER_SEC", "20")
+            interval_val = self._get_kv("interval_min", session) or self._fallback("SYNC_INTERVAL_MIN", "5", session=session)
+            jitter_val = self._get_kv("jitter_sec", session) or self._fallback("SYNC_JITTER_SEC", "20", session=session)
 
             enabled = True if enabled_val is None else (enabled_val.lower() in ["true", "1", "yes"])
             interval_min = int(interval_val) if interval_val and interval_val.isdigit() else 5
@@ -231,14 +239,14 @@ class SqliteStoreAdapter:
 
     def load_performance(self) -> RclonePerformanceSettings:
         with self.session_factory() as session:
-            transfers_val = self._get_kv("transfers", session) or self._get_kv("rclone_transfers", session) or self._fallback("RCLONE_TRANSFERS", "4")
-            checkers_val = self._get_kv("checkers", session) or self._get_kv("rclone_checkers", session) or self._fallback("RCLONE_CHECKERS", "8")
-            tpslimit_val = self._get_kv("tpslimit", session) or self._get_kv("rclone_tpslimit", session) or self._fallback("RCLONE_TPSLIMIT", "10")
-            tpslimit_burst_val = self._get_kv("tpslimit_burst", session) or self._get_kv("rclone_tpslimit_burst", session) or self._fallback("RCLONE_TPSLIMIT_BURST", "1")
-            buffer_size_val = self._get_kv("buffer_size", session) or self._get_kv("rclone_buffer_size", session) or self._fallback("RCLONE_BUFFER_SIZE", "32Mi")
-            chunk_size_val = self._get_kv("drive_chunk_size", session) or self._get_kv("rclone_drive_chunk_size", session) or self._fallback("RCLONE_DRIVE_CHUNK_SIZE", "64M")
-            cutoff_val = self._get_kv("drive_upload_cutoff", session) or self._get_kv("rclone_drive_upload_cutoff", session) or self._fallback("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M")
-            fast_list_val = self._get_kv("fast_list", session) or self._get_kv("rclone_fast_list", session) or self._fallback("RCLONE_FAST_LIST", "false")
+            transfers_val = self._get_kv("transfers", session) or self._get_kv("rclone_transfers", session) or self._fallback("RCLONE_TRANSFERS", "4", session=session)
+            checkers_val = self._get_kv("checkers", session) or self._get_kv("rclone_checkers", session) or self._fallback("RCLONE_CHECKERS", "8", session=session)
+            tpslimit_val = self._get_kv("tpslimit", session) or self._get_kv("rclone_tpslimit", session) or self._fallback("RCLONE_TPSLIMIT", "10", session=session)
+            tpslimit_burst_val = self._get_kv("tpslimit_burst", session) or self._get_kv("rclone_tpslimit_burst", session) or self._fallback("RCLONE_TPSLIMIT_BURST", "1", session=session)
+            buffer_size_val = self._get_kv("buffer_size", session) or self._get_kv("rclone_buffer_size", session) or self._fallback("RCLONE_BUFFER_SIZE", "32Mi", session=session)
+            chunk_size_val = self._get_kv("drive_chunk_size", session) or self._get_kv("rclone_drive_chunk_size", session) or self._fallback("RCLONE_DRIVE_CHUNK_SIZE", "64M", session=session)
+            cutoff_val = self._get_kv("drive_upload_cutoff", session) or self._get_kv("rclone_drive_upload_cutoff", session) or self._fallback("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M", session=session)
+            fast_list_val = self._get_kv("fast_list", session) or self._get_kv("rclone_fast_list", session) or self._fallback("RCLONE_FAST_LIST", "false", session=session)
 
             return RclonePerformanceSettings(
                 transfers=int(transfers_val),
@@ -272,8 +280,8 @@ class SqliteStoreAdapter:
 
     def load_sync_paths(self) -> SyncPathsSettings:
         with self.session_factory() as session:
-            gdrive_src = self._get_kv("gdrive_src", session) or self._fallback("GDRIVE_SRC", "")
-            nc_dest_path = self._get_kv("nc_dest_path", session) or self._fallback("NC_DEST_PATH", "")
+            gdrive_src = self._get_kv("gdrive_src", session) or self._fallback("GDRIVE_SRC", "", session=session)
+            nc_dest_path = self._get_kv("nc_dest_path", session) or self._fallback("NC_DEST_PATH", "", session=session)
             return SyncPathsSettings(gdrive_src=gdrive_src, nc_dest_path=nc_dest_path)
 
     def save_sync_paths(self, settings: SyncPathsSettings, provenance: str = "user") -> None:
@@ -288,7 +296,7 @@ class SqliteStoreAdapter:
 
     def load_retention_policy(self) -> RetentionPolicySettings:
         with self.session_factory() as session:
-            retention_val = self._get_kv("retention_days", session) or self._fallback("RETENTION_DAYS", "60")
+            retention_val = self._get_kv("retention_days", session) or self._fallback("RETENTION_DAYS", "60", session=session)
             days = int(retention_val) if retention_val and retention_val.isdigit() else 60
             return RetentionPolicySettings(retention_days=days)
 

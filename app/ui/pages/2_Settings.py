@@ -459,9 +459,9 @@ with tab3:
         4. You get better API quotas and performance
         
         **Security:**
-        - Credentials are encrypted using Fernet encryption
-        - Stored in the `.env` file with restricted permissions (600)
-        - Never logged or exposed in plain text
+        - Managed strictly in `etc/rclone.conf` under the fixed `[gdrive]` remote
+        - File permissions restricted to 0600 with process lease protection
+        - Never logged or exposed in plain text or API responses
         """)
     
     # Test current configuration

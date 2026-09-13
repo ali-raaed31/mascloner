@@ -25,12 +25,30 @@ class StatusResponse(BaseModel):
 SIZE_REGEX = re.compile(r"^\d+(\.\d+)?(b|k|m|g|t|p|ki|mi|gi|ti|pi|kb|mb|gb|tb|pb)?$", re.IGNORECASE)
 
 class ConfigRequest(BaseModel):
-    """Request model for updating sync configuration."""
+    """Request model for updating sync configuration (fixed endpoints per ADR 0004)."""
 
-    gdrive_remote: str
+    gdrive_remote: Optional[str] = "gdrive"
     gdrive_src: str
-    nc_remote: str
+    nc_remote: Optional[str] = "ncwebdav"
     nc_dest_path: str
+
+    @field_validator("gdrive_remote")
+    @classmethod
+    def _validate_gdrive_remote(cls, v: Optional[str]) -> str:
+        if v and v != "gdrive":
+            raise ValueError(
+                f"Arbitrary remote names are not allowed. Google Drive remote must be 'gdrive', got '{v}'"
+            )
+        return "gdrive"
+
+    @field_validator("nc_remote")
+    @classmethod
+    def _validate_nc_remote(cls, v: Optional[str]) -> str:
+        if v and v != "ncwebdav":
+            raise ValueError(
+                f"Arbitrary remote names are not allowed. Nextcloud remote must be 'ncwebdav', got '{v}'"
+            )
+        return "ncwebdav" 
 
     @field_validator("gdrive_src", "nc_dest_path")
     @classmethod

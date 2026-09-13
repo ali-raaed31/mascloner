@@ -21,7 +21,6 @@ import app.api.config as api_config
 import app.api.db as api_db
 import app.api.dependencies as api_deps
 import app.api.main as api_main
-import app.api.rclone_runner as api_runner
 import app.api.routers.config as router_config
 import app.api.routers.google_drive as router_gdrive
 import app.api.scheduler as api_scheduler
@@ -63,7 +62,6 @@ class ProcessStateReset:
         try:
             fresh_config = api_config.ConfigManager()
             api_config.config = fresh_config
-            api_runner.config = fresh_config
             api_scheduler.config = fresh_config
             api_main.config = fresh_config
             router_config.config = fresh_config
@@ -73,9 +71,6 @@ class ProcessStateReset:
 
         # 2. Reset Dependencies LRU caches
         api_deps.reset_dependencies()
-
-        # 3. Reset Rclone Runner singleton
-        api_runner._runner = None
 
         # 4. Reset Database Engine & SessionLocal
         new_db_path = os.environ.get("MASCLONER_DB_PATH", api_db.DB_PATH)
@@ -106,7 +101,6 @@ class ProcessStateReset:
         api_scheduler._sync_lock = threading.Lock()
         api_scheduler.scheduler = BackgroundScheduler(timezone="UTC")
         api_scheduler.sync_scheduler.scheduler = api_scheduler.scheduler
-        api_scheduler.sync_scheduler.runner = api_runner.get_runner()
         reset_dependencies()
 
         try:
@@ -164,7 +158,6 @@ class ProcessStateReset:
         try:
             restored_config = api_config.ConfigManager()
             api_config.config = restored_config
-            api_runner.config = restored_config
             api_scheduler.config = restored_config
             api_main.config = restored_config
             router_config.config = restored_config
@@ -173,7 +166,6 @@ class ProcessStateReset:
             pass
 
         api_deps.reset_dependencies()
-        api_runner._runner = None
         api_scheduler._sync_lock = threading.Lock()
         api_scheduler.scheduler = BackgroundScheduler(timezone="UTC")
         api_scheduler.sync_scheduler.scheduler = api_scheduler.scheduler
