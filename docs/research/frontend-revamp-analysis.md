@@ -13,10 +13,11 @@ MasCloner v3.0.0 completed the backend architecture modernization: single config
 However, the frontend UI remained rooted in legacy v2 patterns. As an internal operational tool used primarily by **two company operators**, the interface currently suffers from:
 1. Fragmented navigation with missing/awkward page numbering (`2_Settings.py`, `3_Runs_and_Events.py`, `4_Setup_Wizard.py`, `6_Live_Monitor.py` — pages 1 and 5 are missing).
 2. Severe feature and configuration duplication between `2_Settings.py` and `4_Setup_Wizard.py`.
-3. Blocking, thread-locking polling patterns (`time.sleep(60)` in history, `time.sleep(2)` loops in live monitor).
-4. Incomplete security enforcement: authentication (`require_auth`) is only applied on `Home.py` and `6_Live_Monitor.py`, leaving the other pages unguarded.
-5. Critical backend capabilities introduced in v3.0 (60-day retention policies, atomic verified recovery bundle backups, OAuth client credential testing) are completely absent from the UI.
-6. Dead code and broken control flow (e.g. unreachable session state assignments following `st.switch_page`, unused helper files like `setup_panels.py`, orphaned `streamlit_app.py`).
+3. Over-emphasis on interactive folder pickers/browsers, which clutter the UI for an app whose sole, permanent purpose is syncing two fixed folders.
+4. Blocking, thread-locking polling patterns (`time.sleep(60)` in history, `time.sleep(2)` loops in live monitor).
+5. Incomplete security enforcement: authentication (`require_auth`) is only applied on `Home.py` and `6_Live_Monitor.py`, leaving the other pages unguarded.
+6. Critical backend capabilities introduced in v3.0 (60-day retention policies, atomic verified recovery bundle backups, OAuth client credential testing) are completely absent from the UI.
+7. Dead code and broken control flow (e.g. unreachable session state assignments following `st.switch_page`, unused helper files like `setup_panels.py`, orphaned `streamlit_app.py`).
 
 This document presents the findings of our research against high-trust primary sources, a two-axis code review (Standards and Spec), and a ground-up design plan for a unified, modern, intuitive operator console for MasCloner v3.1.0.
 
@@ -92,27 +93,24 @@ This document presents the findings of our research against high-trust primary s
 
 ## 4. Operator Needs & UX Rethink (2-Person Internal Operations Team)
 
-For an internal tool run by two engineers/operators:
-- They do **not** need a consumer onboarding wizard separate from daily settings.
-- They do **not** need to click between 4 different pages to check whether a sync is healthy, what it transferred, and whether the folder path is right.
-- They need:
-  1. **Immediate Operational Clarity**:
+For an internal tool run by two engineers/operators with a fixed dedicated purpose (one-way sync between two defined folders forever):
+- **Core Truth**: The folder paths are static fixtures, set during initial deployment. They do not change day-to-day.
+- **Wrong UX**: Making folder trees, subfolder dropdowns, and folder picker widgets dominate the screen.
+- **Right UX**: 
+  1. **Clear Sync Route Verification Card**: A prominent visual badge and summary showing the exact current sync route:
+     `[Google Drive Source: /Folder] ──────( One-Way Sync )──────▶ [Nextcloud Destination: /Folder]`
+     with live pills: `● Connected`, `● Path Validated`, `● Last Checked: 2m ago`.
+  2. **Single-Click "Verify Both Endpoints"**: Tests access to the Google Drive source path and the Nextcloud destination path in parallel and displays green checkmarks.
+  3. **Tucked-Away "Advanced Settings / Change Path"**: Folders and path editing are placed in an expandable/advanced modal or drawer that stays closed unless deliberately clicked.
+  4. **Immediate Operational Clarity**:
      - Is the scheduler active or paused?
      - Is a sync running right now? What file is it transferring? How fast? Any errors?
-     - Can I stop a running sync or trigger a run with a single click?
-  2. **Unified Storage & Path Management**:
-     - Both endpoints (`GoogleDriveSource` and `NextcloudDestination`) side by side.
-     - Interactive folder selection without having to guess rclone folder paths.
-     - One-click token renewal and OAuth verification.
-  3. **High-Density History & Incident Triaging**:
+     - Single-click controls: "Sync Now", "Stop Sync", "Pause / Resume".
+  5. **High-Density History & Incident Triaging**:
      - Clean timeline of past `SyncRun`s.
-     - Instant filter for failed/aborted runs.
-     - Expandable `FileEvent` drilldowns (added, updated, skipped, conflicts, errors).
-     - Streaming log viewer that does not refresh the entire browser page.
-  4. **System Health & Maintenance**:
-     - Engine performance settings (rclone concurrency, pacing, chunks).
-     - 60-day retention status and manual purge.
-     - Instant verified database recovery bundle generation.
+     - Drilldown into failed files and rclone error details.
+  6. **System Health & Maintenance**:
+     - 60-day retention status and 1-click verified backup recovery bundle generation.
 
 ---
 
@@ -120,15 +118,15 @@ For an internal tool run by two engineers/operators:
 
 ### A. Navigation Structure (`st.navigation` & `st.Page`)
 
-Rather than relying on filesystem numbering (`2_...`, `3_...`), the application entry point (`Home.py`) configures structured navigation:
+The application entry point (`Home.py`) configures structured, clean navigation:
 
 ```
 MasCloner Console
 ├── Operations
-│   ├── ⚡ Live Dashboard       (Overview, active sync snapshot, live logs, quick triggers)
+│   ├── ⚡ Live Dashboard       (Route status card, active sync snapshot, live logs, quick triggers)
 │   └── 📋 Run History & Audit   (Searchable runs, file event logs, error inspection)
 ├── Configuration
-│   ├── 🔗 Storage & Folders     (Google Drive + Nextcloud setup, auth, interactive folder browsers)
+│   ├── 🔗 Storage & Connections (Drive verification cards, connection tests, advanced path editor)
 │   └── ⚙️ Schedule & Engine     (Sync interval, jitter preview, rclone concurrency tuning)
 └── Maintenance
     ├── 🛡️ Retention & Backups   (60-day policy, verified recovery bundles, DB size)
@@ -138,5 +136,6 @@ MasCloner Console
 ### B. Modern Streamlit Technical Standards
 - **Global Auth Boundary**: `Home.py` executes `require_auth(api)` before calling `st.navigation().run()`. Every page is automatically and unconditionally protected.
 - **Non-blocking Live Streaming**: `@st.fragment(run_every="2s")` on the active run card and log feed, keeping the rest of the application fully responsive without full-page reloads.
-- **Shared UI Toolkit**: Single source of truth for formatters (`format_bytes`, `format_duration`, `format_timestamp`), status badges, and consistent alert styles.
+- **Route Verification Component**: A reusable visual card displaying source and destination paths with health verification pills.
+- **Advanced Mode for Path Changes**: Folder browser and manual path input kept in a collapsible advanced accordion to preserve clean operational focus.
 - **Elimination of Dead Code**: Complete removal of `streamlit_app.py` and unused legacy components.
