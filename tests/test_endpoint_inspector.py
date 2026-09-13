@@ -69,6 +69,19 @@ async def test_managed_endpoint_inspection_does_not_mutate_config(
     inspector: EndpointInspector, isolated_install: InstallationRoot
 ):
     """Verify that browse and connection test calls leave rclone.conf byte-for-byte identical."""
+    configured_content = (
+        "[gdrive]\n"
+        "type = drive\n"
+        "scope = drive.readonly\n"
+        "token = {\"access_token\":\"tok123\"}\n\n"
+        "[ncwebdav]\n"
+        "type = webdav\n"
+        "vendor = nextcloud\n"
+        "url = https://nextcloud.example.local/remote.php/webdav/\n"
+        "user = testuser\n"
+        "pass = obscured_pass\n"
+    )
+    isolated_install.rclone_conf_path.write_text(configured_content, encoding="utf-8")
     initial_bytes = isolated_install.rclone_conf_path.read_bytes()
     initial_stat = isolated_install.rclone_conf_path.stat()
 

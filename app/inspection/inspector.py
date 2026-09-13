@@ -412,24 +412,25 @@ class EndpointInspector:
         from ..configuration import Configuration
         from ..api.db import get_db_session
 
-        cfg = Configuration(session_factory=get_db_session)
+        cfg = Configuration(session_factory=get_db_session, rclone_conf_path=self._rclone_conf)
         meta = cfg.get_endpoint_metadata("gdrive")
-        if not meta or meta.details.get("type") != "drive" or meta.details.get("token_configured") != "true":
+        if not meta or meta.type != "drive":
             return EndpointStatusResult(
                 configured=False,
                 endpoint="gdrive",
                 remote_name="gdrive",
             )
 
+        is_conf = meta.details.get("token_configured") == "true"
         scope = meta.details.get("scope")
         folders: Optional[List[str]] = None
-        if include_preview_folders:
+        if include_preview_folders and is_conf:
             browse_res = await self.browse_folders("gdrive", path="", limit=10)
             if browse_res.success:
                 folders = browse_res.folders
 
         return EndpointStatusResult(
-            configured=True,
+            configured=is_conf,
             endpoint="gdrive",
             remote_name="gdrive",
             scope=scope,
@@ -442,29 +443,30 @@ class EndpointInspector:
         from ..configuration import Configuration
         from ..api.db import get_db_session
 
-        cfg = Configuration(session_factory=get_db_session)
-        nc_info = cfg.get_nextcloud_metadata()
-        if not nc_info or not nc_info.get("configured"):
+        cfg = Configuration(session_factory=get_db_session, rclone_conf_path=self._rclone_conf)
+        meta = cfg.get_endpoint_metadata("ncwebdav")
+        if not meta or meta.type != "webdav":
             return EndpointStatusResult(
                 configured=False,
                 endpoint="ncwebdav",
                 remote_name="ncwebdav",
             )
 
+        is_conf = meta.details.get("pass_configured") == "true" or bool(meta.details.get("user") and meta.details.get("url"))
         folders: Optional[List[str]] = None
-        if include_preview_folders:
+        if include_preview_folders and is_conf:
             browse_res = await self.browse_folders("ncwebdav", path="", limit=10)
             if browse_res.success:
                 folders = browse_res.folders
 
         return EndpointStatusResult(
-            configured=True,
+            configured=is_conf,
             endpoint="ncwebdav",
             remote_name="ncwebdav",
-            url=nc_info.get("url"),
-            user=nc_info.get("user"),
+            url=meta.details.get("url"),
+            user=meta.details.get("user"),
             folders=folders,
-            details=nc_info,
+            details=meta.details,
         )
 
     # --- Size estimation ---
