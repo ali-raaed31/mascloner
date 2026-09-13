@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,12 +13,12 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..dependencies import get_runner, get_scheduler
+from ..dependencies import get_runner
 from ..exceptions import DatabaseError, NotFoundError, SchedulerError
 from ..models import FileEvent, Run, SyncStatus
 from ..rclone_runner import RcloneRunner
-from ..scheduler import SyncScheduler
 from ..schemas import ApiResponse, FileEventResponse, RunResponse
+from ...execution import SyncExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,25 @@ async def get_current_run(
     Returns run information and live monitoring data, or null if no sync running.
     """
     try:
-        # First check database for running status
+        executor = SyncExecutor.get_instance()
+        snapshot = executor.get_active_snapshot()
+        if snapshot and snapshot.is_active:
+            return {
+                "id": snapshot.run_id,
+                "status": snapshot.status,
+                "started_at": snapshot.started_at.isoformat(),
+                "num_added": snapshot.files_transferred,
+                "num_updated": 0,
+                "bytes_transferred": snapshot.bytes_transferred,
+                "errors": snapshot.errors,
+                "log_path": None,
+                "is_process_running": True,
+                "percentage": snapshot.percentage,
+                "speed_bps": snapshot.speed_bps,
+                "recent_events": snapshot.recent_events,
+            }
+
+        # Check database for running status
         current_run = (
             db.execute(
                 select(Run)
@@ -112,26 +133,26 @@ async def get_run_logs(
     db: Session = Depends(get_db),
     runner: RcloneRunner = Depends(get_runner),
 ) -> Dict[str, Any]:
-    """Get log lines for a running or completed sync.
-
-    Args:
-        run_id: The run ID to get logs for
-        since: Line number to start reading from (for incremental polling)
-        limit: Maximum number of lines to return
-
-    Returns:
-        Dict with run_id, logs list, and next_line for pagination
-    """
+    """Get log lines for a running or completed sync."""
     try:
         # Verify run exists
         run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
         if not run:
             raise NotFoundError("Run", run_id)
 
-        # Check if this is the current run
+        executor = SyncExecutor.get_instance()
+        if executor.get_active_run_id() == run_id:
+            logs, next_line, is_live = executor.tail_log_file(run_id, since_line=since, limit=limit)
+            return {
+                "run_id": run_id,
+                "logs": logs,
+                "next_line": next_line,
+                "is_live": is_live,
+            }
+
+        # Check if active in legacy runner
         runner_info = runner.get_current_run_info()
         if runner_info and runner_info.get("run_id") == run_id:
-            # Tail log file for live logs
             logs, next_line = runner.tail_log_file(since_line=since, limit=limit)
             return {
                 "run_id": run_id,
@@ -139,61 +160,15 @@ async def get_run_logs(
                 "next_line": next_line,
                 "is_live": True,
             }
-        else:
-            # For completed runs, read from log_path if available
-            if run.log_path:
-                import os
 
-                if os.path.exists(run.log_path):
-                    # Temporarily set log path for tailing
-                    logs = []
-                    try:
-                        import json
-
-                        with open(run.log_path, "r", encoding="utf-8") as f:
-                            for line_num, line in enumerate(f):
-                                if line_num < since:
-                                    continue
-                                if len(logs) >= limit:
-                                    break
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    obj = json.loads(line)
-                                    logs.append({
-                                        "line": line_num,
-                                        "timestamp": obj.get("time", ""),
-                                        "level": obj.get("level", "info"),
-                                        "message": obj.get("msg", ""),
-                                        "object": obj.get("object", ""),
-                                        "size": obj.get("size", 0),
-                                    })
-                                except json.JSONDecodeError:
-                                    logs.append({
-                                        "line": line_num,
-                                        "timestamp": "",
-                                        "level": "info",
-                                        "message": line,
-                                        "object": "",
-                                        "size": 0,
-                                    })
-                    except Exception as e:
-                        logger.error("Error reading log file: %s", e)
-
-                    return {
-                        "run_id": run_id,
-                        "logs": logs,
-                        "next_line": since + len(logs),
-                        "is_live": False,
-                    }
-
-            return {
-                "run_id": run_id,
-                "logs": [],
-                "next_line": since,
-                "is_live": False,
-            }
+        # Read completed log file via executor helper
+        logs, next_line, is_live = executor.tail_log_file(run_id, since_line=since, limit=limit)
+        return {
+            "run_id": run_id,
+            "logs": logs,
+            "next_line": next_line,
+            "is_live": is_live,
+        }
     except NotFoundError:
         raise
     except Exception as exc:
@@ -207,10 +182,7 @@ async def stop_run(
     db: Session = Depends(get_db),
     runner: RcloneRunner = Depends(get_runner),
 ) -> Dict[str, Any]:
-    """Request graceful stop of a running sync.
-
-    Sends SIGTERM to rclone, which finishes the current file before stopping.
-    """
+    """Request graceful stop of a running sync."""
     try:
         # Verify run exists and is running
         run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
@@ -223,26 +195,34 @@ async def stop_run(
                 detail=f"Run {run_id} is not running (status: {run.status})",
             )
 
-        # Check if this is the current run in the runner
-        runner_info = runner.get_current_run_info()
-        if not runner_info or runner_info.get("run_id") != run_id:
+        executor = SyncExecutor.get_instance()
+        if executor.get_active_run_id() == run_id:
+            abort_res = executor.request_abort(run_id)
+            if abort_res.requested:
+                return {
+                    "success": True,
+                    "message": abort_res.message,
+                    "run_id": run_id,
+                }
             raise HTTPException(
                 status_code=400,
-                detail="Run is not the currently active sync process",
+                detail=abort_res.message,
             )
 
-        # Request stop
-        if runner.request_stop():
-            return {
-                "success": True,
-                "message": "Stop requested - rclone will finish current file and exit",
-                "run_id": run_id,
-            }
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="No active rclone process to stop",
-            )
+        # Fallback to legacy runner stop
+        runner_info = runner.get_current_run_info()
+        if runner_info and runner_info.get("run_id") == run_id:
+            if runner.request_stop():
+                return {
+                    "success": True,
+                    "message": "Stop requested - rclone will finish current file and exit",
+                    "run_id": run_id,
+                }
+
+        raise HTTPException(
+            status_code=400,
+            detail="Run is not the currently active sync process",
+        )
     except (NotFoundError, HTTPException):
         raise
     except Exception as exc:
@@ -289,14 +269,24 @@ async def get_run_events(run_id: int, limit: int = 200, db: Session = Depends(ge
 
 
 @router.post("", response_model=ApiResponse)
-async def trigger_sync(scheduler: SyncScheduler = Depends(get_scheduler)) -> ApiResponse:
-    """Trigger a manual sync run."""
+@router.post("/trigger", response_model=ApiResponse)
+async def trigger_sync() -> ApiResponse:
+    """Trigger a manual sync run using SyncExecutor."""
     try:
-        if scheduler.trigger_sync_now():
-            return ApiResponse(success=True, message="Sync triggered successfully")
-        raise SchedulerError("Failed to trigger sync", operation="trigger_sync")
-    except SchedulerError:
-        raise
+        executor = SyncExecutor.get_instance()
+        result = executor.trigger_manual_run()
+        if result.accepted:
+            return ApiResponse(
+                success=True,
+                message=result.message,
+                data={"run_id": result.run_id, "status": result.status},
+            )
+        else:
+            return ApiResponse(
+                success=False,
+                message=result.message,
+                data={"run_id": result.run_id, "status": result.status},
+            )
     except Exception as exc:
         logger.error("Failed to trigger sync: %s", exc)
         raise SchedulerError(f"Failed to trigger sync: {exc}", operation="trigger_sync")
@@ -330,4 +320,3 @@ async def get_events(limit: int = 200, db: Session = Depends(get_db)) -> List[Fi
     except Exception as exc:
         logger.error("Failed to get events: %s", exc)
         raise DatabaseError(f"Failed to get events: {exc}", operation="get_events")
-
