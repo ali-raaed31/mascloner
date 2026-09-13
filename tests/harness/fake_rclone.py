@@ -240,6 +240,11 @@ def run_fake_rclone_cli(
         sys.stdout.write(json.dumps({"count": 5, "bytes": 10485760}))
         return 0
 
+    if subcommand == "obscure":
+        pwd = pos_args[1] if len(pos_args) > 1 else ""
+        sys.stdout.write(f"obscured_{pwd}\n")
+        return 0
+
     if subcommand == "about":
         sys.stdout.write("Total: 107374182400\nUsed: 10737418240\nFree: 96636764160\n")
         return 0

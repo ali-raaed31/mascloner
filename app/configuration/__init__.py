@@ -15,6 +15,7 @@ from .manager import Configuration
 from .models import (
     BootstrapSettings,
     GoogleDriveSourceDraft,
+    NextcloudDestinationDraft,
     EffectiveConfiguration,
     EndpointMetadata,
     RclonePerformanceSettings,
@@ -36,6 +37,7 @@ __all__ = [
     "StoreType",
     "BootstrapSettings",
     "GoogleDriveSourceDraft",
+    "NextcloudDestinationDraft",
     "ScheduleSettings",
     "RclonePerformanceSettings",
     "SyncPathsSettings",

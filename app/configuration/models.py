@@ -217,3 +217,61 @@ class GoogleDriveSourceDraft(BaseModel):
     def __repr__(self) -> str:
         cid = self.client_id[:10] + "..." if self.client_id else None
         return f"GoogleDriveSourceDraft(scope={self.scope!r}, client_id={cid!r}, client_secret='***', token='***')"
+
+
+class NextcloudDestinationDraft(BaseModel):
+    """Candidate draft for configuring the fixed NextcloudDestination.
+
+    Per ADR 0004: Caller cannot specify custom remote names. Remote is strictly 'ncwebdav'.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    user: str
+    password: str
+    vendor: str = "nextcloud"
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        v = v.strip()
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"URL scheme must be http or https, got {parsed.scheme!r}")
+        if not parsed.netloc:
+            raise ValueError("URL must have a valid domain or hostname")
+        if parsed.username or parsed.password:
+            netloc = parsed.hostname
+            if parsed.port:
+                netloc = f"{netloc}:{parsed.port}"
+            parsed = parsed._replace(netloc=netloc)
+            v = urlunparse(parsed)
+        return v
+
+    @field_validator("user")
+    @classmethod
+    def _validate_user(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("User cannot be empty")
+        return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Password cannot be empty")
+        return v.strip()
+
+    @field_validator("vendor")
+    @classmethod
+    def _validate_vendor(cls, v: str) -> str:
+        if v.lower() != "nextcloud":
+            raise ValueError(f"Only 'nextcloud' vendor is supported, got {v!r}")
+        return "nextcloud"
+
+    def __repr__(self) -> str:
+        return f"NextcloudDestinationDraft(url={self.url!r}, user={self.user!r}, vendor={self.vendor!r}, password='***')"

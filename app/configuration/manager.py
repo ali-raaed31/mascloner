@@ -23,6 +23,7 @@ from .lease import ConfigurationLease, get_process_lease
 from .models import (
     BootstrapSettings,
     GoogleDriveSourceDraft,
+    NextcloudDestinationDraft,
     EffectiveConfiguration,
     EndpointMetadata,
     RclonePerformanceSettings,
@@ -518,3 +519,64 @@ class Configuration:
                         tmp_path.unlink()
                     except Exception:
                         pass
+
+    # --- NextcloudDestination management (rclone.conf) ---
+    def validate_nextcloud_draft(
+        self, draft: Union[NextcloudDestinationDraft, Dict[str, Any]]
+    ) -> None:
+        """Validate NextcloudDestination draft in an isolated temporary configuration.
+
+        Ensures caller cannot specify custom remote names and never touches live configuration.
+        """
+        if isinstance(draft, dict):
+            remote = draft.get("remote_name") or draft.get("remote")
+            if remote and remote != "ncwebdav":
+                raise ConfigurationValidationError(
+                    f"Caller-specified remote name {remote!r} is not supported. "
+                    "Only the fixed 'ncwebdav' remote is permitted for NextcloudDestination."
+                )
+        typed_draft = _coerce_model(NextcloudDestinationDraft, draft)
+        self._rclone_adapter.validate_nextcloud_draft(
+            typed_draft, rclone_bin=self._bootstrap.rclone_bin_path
+        )
+
+    def promote_nextcloud_destination(
+        self, draft: Union[NextcloudDestinationDraft, Dict[str, Any]], timeout: float = 2.0
+    ) -> None:
+        """Atomically promote validated Nextcloud draft to managed rclone.conf under Configuration lease."""
+        if isinstance(draft, dict):
+            remote = draft.get("remote_name") or draft.get("remote")
+            if remote and remote != "ncwebdav":
+                raise ConfigurationValidationError(
+                    f"Caller-specified remote name {remote!r} is not supported. "
+                    "Only the fixed 'ncwebdav' remote is permitted for NextcloudDestination."
+                )
+        typed_draft = _coerce_model(NextcloudDestinationDraft, draft)
+
+        with self.acquire_lease(holder="NextcloudDestinationConfiguration", timeout=timeout):
+            # 1. Validate in isolated temp config
+            self._rclone_adapter.validate_nextcloud_draft(
+                typed_draft, rclone_bin=self._bootstrap.rclone_bin_path
+            )
+            # 2. Promote atomically to managed rclone.conf
+            self._rclone_adapter.promote_nextcloud_draft(
+                typed_draft, rclone_bin=self._bootstrap.rclone_bin_path
+            )
+
+    def get_nextcloud_metadata(self) -> Dict[str, Any]:
+        """Return safe metadata for Nextcloud destination without exposing secrets."""
+        meta = self.get_endpoint_metadata("ncwebdav")
+        if not meta or meta.details.get("type") != "webdav":
+            return {"configured": False, "remote_name": "ncwebdav", "url": None, "user": None}
+
+        url = meta.details.get("url")
+        user = meta.details.get("user")
+        is_conf = meta.details.get("pass_configured") == "true" or bool(user and url)
+
+        return {
+            "configured": is_conf,
+            "remote_name": "ncwebdav",
+            "url": url,
+            "user": user,
+            "vendor": meta.details.get("vendor", "nextcloud"),
+        }

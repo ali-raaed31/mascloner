@@ -46,6 +46,7 @@ from .exceptions import ConfigurationStoreError, ConfigurationValidationError
 from .models import (
     BootstrapSettings,
     GoogleDriveSourceDraft,
+    NextcloudDestinationDraft,
     EndpointMetadata,
     RclonePerformanceSettings,
     RetentionPolicySettings,
@@ -465,6 +466,169 @@ class RcloneConfStoreAdapter:
                 encoding="utf-8",
             ) as tf:
                 parser.write(tf)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = Path(tf.name)
+
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, self.conf_path)
+            os.chmod(self.conf_path, 0o600)
+        except Exception as exc:
+            if orig_content is not None:
+                try:
+                    self.conf_path.write_bytes(orig_content)
+                    os.chmod(self.conf_path, 0o600)
+                except Exception:
+                    pass
+            raise ConfigurationStoreError(f"Failed to atomically promote rclone.conf: {exc}") from exc
+        finally:
+            if tmp_path and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+
+    def validate_nextcloud_draft(
+        self, draft: NextcloudDestinationDraft, rclone_bin: Path | str = "rclone"
+    ) -> bool:
+        """Validate candidate Nextcloud draft in an isolated temporary rclone config file.
+
+        The live configuration at self.conf_path is never mutated or opened for writing.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_conf_path = Path(tmpdir) / "rclone.conf"
+
+            create_cmd = [
+                str(rclone_bin),
+                "config",
+                "create",
+                "ncwebdav",
+                "webdav",
+                f"url={draft.url}",
+                f"vendor={draft.vendor}",
+                f"user={draft.user}",
+                f"pass={draft.password}",
+                f"--config={tmp_conf_path}",
+            ]
+            try:
+                create_proc = subprocess.run(
+                    create_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise ConfigurationValidationError("Nextcloud draft creation timed out after 15s")
+            except FileNotFoundError:
+                raise ConfigurationValidationError(f"rclone binary not found at {rclone_bin}")
+
+            if create_proc.returncode != 0:
+                raw_err = create_proc.stderr or create_proc.stdout or f"exit code {create_proc.returncode}"
+                redacted = redact_secrets(raw_err, [draft.password, draft.user])
+                raise ConfigurationValidationError(
+                    f"Nextcloud draft creation failed: {redacted.strip()}"
+                )
+
+            os.chmod(tmp_conf_path, 0o600)
+
+            test_cmd = [
+                str(rclone_bin),
+                "lsd",
+                "ncwebdav:",
+                "--max-depth=1",
+                f"--config={tmp_conf_path}",
+            ]
+            try:
+                test_proc = subprocess.run(
+                    test_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise ConfigurationValidationError("Nextcloud connection test timed out after 15s")
+
+            if test_proc.returncode != 0:
+                raw_err = test_proc.stderr or test_proc.stdout or f"exit code {test_proc.returncode}"
+                redacted = redact_secrets(raw_err, [draft.password, draft.user])
+                raise ConfigurationValidationError(
+                    f"Nextcloud connection test failed: {redacted.strip()}"
+                )
+
+        return True
+
+    def promote_nextcloud_draft(
+        self, draft: NextcloudDestinationDraft, rclone_bin: Path | str = "rclone"
+    ) -> None:
+        """Atomically promote validated Nextcloud draft to managed rclone.conf with 0600 permissions.
+
+        Preserves any existing non-ncwebdav sections (e.g. gdrive).
+        """
+        self.conf_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_conf_path = Path(tmpdir) / "rclone.conf"
+            create_cmd = [
+                str(rclone_bin),
+                "config",
+                "create",
+                "ncwebdav",
+                "webdav",
+                f"url={draft.url}",
+                f"vendor={draft.vendor}",
+                f"user={draft.user}",
+                f"pass={draft.password}",
+                f"--config={tmp_conf_path}",
+            ]
+            try:
+                create_proc = subprocess.run(
+                    create_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except Exception as exc:
+                raise ConfigurationStoreError(f"Failed to generate Nextcloud config: {exc}") from exc
+
+            if create_proc.returncode != 0:
+                raw_err = create_proc.stderr or create_proc.stdout or f"exit code {create_proc.returncode}"
+                redacted = redact_secrets(raw_err, [draft.password, draft.user])
+                raise ConfigurationStoreError(f"Failed to generate Nextcloud config: {redacted.strip()}")
+
+            temp_parser = configparser.RawConfigParser(interpolation=None)
+            temp_parser.optionxform = str
+            temp_parser.read(tmp_conf_path, encoding="utf-8")
+            if not temp_parser.has_section("ncwebdav"):
+                raise ConfigurationStoreError("Generated temporary config missing [ncwebdav] section")
+
+            live_parser = configparser.RawConfigParser(interpolation=None)
+            live_parser.optionxform = str
+            if self.conf_path.exists():
+                try:
+                    with open(self.conf_path, "r", encoding="utf-8") as f:
+                        live_parser.read_file(f)
+                except Exception as exc:
+                    raise ConfigurationStoreError(f"Failed to read existing rclone.conf: {exc}") from exc
+
+            if not live_parser.has_section("ncwebdav"):
+                live_parser.add_section("ncwebdav")
+
+            for opt in temp_parser.options("ncwebdav"):
+                live_parser.set("ncwebdav", opt, temp_parser.get("ncwebdav", opt))
+
+        orig_content = self.conf_path.read_bytes() if self.conf_path.exists() else None
+        tmp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                dir=str(self.conf_path.parent),
+                delete=False,
+                encoding="utf-8",
+            ) as tf:
+                live_parser.write(tf)
                 tf.flush()
                 os.fsync(tf.fileno())
                 tmp_path = Path(tf.name)
