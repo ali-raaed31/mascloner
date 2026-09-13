@@ -30,21 +30,19 @@ def test_legacy_database_startup_and_status_preservation(
     assert len(runs) >= 5
 
     statuses = {r["status"] for r in runs}
-    # Characterize legacy statuses present in database:
-    assert "success" in statuses
-    assert "error" in statuses
-    assert "stopped" in statuses
-    assert "partial" in statuses
-    assert "running" in statuses
+    # Verified canonical statuses after migration and startup recovery:
+    assert "completed" in statuses
+    assert "failed" in statuses
+    assert "aborted" in statuses
 
-    # Find the success run
-    success_run = next(r for r in runs if r["status"] == "success")
-    assert success_run["num_added"] == 15
-    assert success_run["num_updated"] == 2
-    assert success_run["bytes_transferred"] == 1048576
+    # Find the completed run (migrated from legacy success)
+    completed_run = next(r for r in runs if r["status"] == "completed")
+    assert completed_run["num_added"] == 15
+    assert completed_run["num_updated"] == 2
+    assert completed_run["bytes_transferred"] == 1048576
 
     # 3. GET /runs/{id}/events loads legacy file events
-    events_res = legacy_client.get(f"/runs/{success_run['id']}/events")
+    events_res = legacy_client.get(f"/runs/{completed_run['id']}/events")
     assert events_res.status_code == 200
     events = events_res.json()
     assert len(events) == 2

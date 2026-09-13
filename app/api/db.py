@@ -74,8 +74,9 @@ def init_db() -> None:
         Base.metadata.create_all(bind=engine)
         logger.info("Database initialized successfully at %s", DB_PATH)
 
-        # Stamp the database with current Alembic head if alembic_version table is missing
+        # Stamp if missing, otherwise upgrade any pending migrations
         _stamp_alembic_if_needed()
+        run_migrations()
 
     except SQLAlchemyError as e:
         logger.error("Failed to initialize database: %s", e)
@@ -121,6 +122,7 @@ def stamp_database_head() -> bool:
 
         alembic_cfg = Config(str(alembic_cfg_path))
         alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
 
         command.stamp(alembic_cfg, "head")
         logger.info("Database stamped with Alembic head revision")
@@ -153,6 +155,7 @@ def run_migrations() -> bool:
 
         alembic_cfg = Config(str(alembic_cfg_path))
         alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
+        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
 
         command.upgrade(alembic_cfg, "head")
         logger.info("Database migrations completed successfully")

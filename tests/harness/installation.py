@@ -241,6 +241,18 @@ NC_DEST_PATH=FreshDestination
             session.commit()
         engine.dispose()
 
+        # Stamp legacy database at revision 20250101_000002 so migration 20250101_000003 runs on startup
+        try:
+            from alembic import command
+            from alembic.config import Config
+            project_root = Path(__file__).parent.parent.parent
+            alembic_cfg = Config(str(project_root / "alembic.ini"))
+            alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
+            alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{self.db_path}")
+            command.stamp(alembic_cfg, "20250101_000002")
+        except Exception:
+            pass
+
         # Legacy rclone.conf
         rclone_conf_content = """[gdrive]
 type = drive

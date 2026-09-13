@@ -55,7 +55,7 @@ with tab1:
         col1, col2, col3, col4 = st.columns(4)
         
         total_runs = len(runs)
-        successful_runs = len([r for r in runs if r.get("status") == "success"])
+        successful_runs = len([r for r in runs if r.get("status") in ["completed", "success"]])
         failed_runs = len([r for r in runs if r.get("status") in ["error", "failed"]])
         total_files = sum(r.get("num_added", 0) + r.get("num_updated", 0) for r in runs)
         
@@ -76,7 +76,7 @@ with tab1:
         with col1:
             status_filter = st.selectbox(
                 "Filter by Status",
-                ["All", "success", "error", "failed", "running"],
+                ["All", "completed", "running", "failed", "aborted", "skipped", "pending"],
                 index=0
             )
         
@@ -116,10 +116,16 @@ with tab1:
             for run in filtered_runs:
                 # Status with emoji
                 status_emoji = {
+                    "completed": "✅",
                     "success": "✅",
+                    "failed": "❌",
                     "error": "❌",
-                    "failed": "❌", 
-                    "running": "🔄"
+                    "running": "🔄",
+                    "pending": "⏳",
+                    "aborted": "⏹️",
+                    "stopped": "⏹️",
+                    "cancelled": "⏹️",
+                    "skipped": "⏭️",
                 }.get(run.get("status", "unknown"), "❓")
                 
                 # Duration calculation
@@ -372,7 +378,7 @@ with tab3:
         st.subheader("⚡ Performance Metrics")
         
         # Calculate averages
-        successful_runs = [r for r in runs if r.get("status") == "success"]
+        successful_runs = [r for r in runs if r.get("status") in ["completed", "success"]]
         
         if successful_runs:
             avg_duration = sum(r.get("duration_sec", 0) for r in successful_runs) / len(successful_runs)

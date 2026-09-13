@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..dependencies import get_runner, get_scheduler
 from ..exceptions import DatabaseError, NotFoundError, SchedulerError
-from ..models import FileEvent, Run
+from ..models import FileEvent, Run, SyncStatus
 from ..rclone_runner import RcloneRunner
 from ..scheduler import SyncScheduler
 from ..schemas import ApiResponse, FileEventResponse, RunResponse
@@ -23,11 +23,18 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 @router.get("", response_model=List[RunResponse])
-async def get_runs(limit: int = 20, db: Session = Depends(get_db)):
-    """Get recent sync runs."""
+async def get_runs(
+    limit: int = 20,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+) -> List[RunResponse]:
+    """Get recent sync runs, optionally filtered by status."""
     try:
+        stmt = select(Run)
+        if status:
+            stmt = stmt.where(Run.status == status.lower())
         runs = (
-            db.execute(select(Run).order_by(desc(Run.id)).limit(limit))
+            db.execute(stmt.order_by(desc(Run.id)).limit(limit))
             .scalars()
             .all()
         )
@@ -42,6 +49,7 @@ async def get_runs(limit: int = 20, db: Session = Depends(get_db)):
                 bytes_transferred=run.bytes_transferred,
                 errors=run.errors,
                 log_path=run.log_path,
+                message=getattr(run, "message", None),
             )
             for run in runs
         ]
@@ -65,7 +73,7 @@ async def get_current_run(
         current_run = (
             db.execute(
                 select(Run)
-                .where(Run.status == "running")
+                .where(Run.status == SyncStatus.RUNNING)
                 .order_by(desc(Run.started_at))
             )
             .scalars()
@@ -209,7 +217,7 @@ async def stop_run(
         if not run:
             raise NotFoundError("Run", run_id)
 
-        if run.status != "running":
+        if run.status != SyncStatus.RUNNING:
             raise HTTPException(
                 status_code=400,
                 detail=f"Run {run_id} is not running (status: {run.status})",
@@ -243,7 +251,7 @@ async def stop_run(
 
 
 @router.get("/{run_id}/events", response_model=List[FileEventResponse])
-async def get_run_events(run_id: int, limit: int = 200, db: Session = Depends(get_db)):
+async def get_run_events(run_id: int, limit: int = 200, db: Session = Depends(get_db)) -> List[FileEventResponse]:
     """Get file events for a specific run."""
     try:
         run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
@@ -281,7 +289,7 @@ async def get_run_events(run_id: int, limit: int = 200, db: Session = Depends(ge
 
 
 @router.post("", response_model=ApiResponse)
-async def trigger_sync(scheduler: SyncScheduler = Depends(get_scheduler)):
+async def trigger_sync(scheduler: SyncScheduler = Depends(get_scheduler)) -> ApiResponse:
     """Trigger a manual sync run."""
     try:
         if scheduler.trigger_sync_now():
@@ -299,7 +307,7 @@ events_router = APIRouter(prefix="/events", tags=["events"])
 
 
 @events_router.get("", response_model=List[FileEventResponse])
-async def get_events(limit: int = 200, db: Session = Depends(get_db)):
+async def get_events(limit: int = 200, db: Session = Depends(get_db)) -> List[FileEventResponse]:
     """Get recent file events across all runs."""
     try:
         events = (

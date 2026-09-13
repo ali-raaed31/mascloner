@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from app.api.models import SyncStatus
 
 import re
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -73,14 +74,15 @@ class RunResponse(BaseModel):
     """Response model for a sync run."""
 
     id: int
-    status: str
+    status: SyncStatus
     started_at: str
-    finished_at: Optional[str]
+    finished_at: Optional[str] = None
     num_added: int
     num_updated: int
     bytes_transferred: int
     errors: int
-    log_path: Optional[str]
+    log_path: Optional[str] = None
+    message: Optional[str] = None
 
 
 class FileEventResponse(BaseModel):

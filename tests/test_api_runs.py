@@ -26,7 +26,7 @@ class TestRunsEndpoint:
         """Should return runs when they exist."""
         # Create a test run
         run = Run(
-            status="success",
+            status="completed",
             num_added=5,
             num_updated=2,
             bytes_transferred=1024,
@@ -47,7 +47,7 @@ class TestRunsEndpoint:
         # Create multiple runs
         for i in range(5):
             run = Run(
-                status="success",
+                status="completed",
                 num_added=i,
                 num_updated=0,
                 bytes_transferred=0,
@@ -78,7 +78,7 @@ class TestEventsEndpoint:
         """Should return events when they exist."""
         # Create a run first
         run = Run(
-            status="success",
+            status="completed",
             started_at=datetime.now(timezone.utc),
         )
         test_session.add(run)
@@ -116,7 +116,7 @@ class TestRunEventsEndpoint:
         """Should return events for a specific run."""
         # Create a run
         run = Run(
-            status="success",
+            status="completed",
             started_at=datetime.now(timezone.utc),
         )
         test_session.add(run)

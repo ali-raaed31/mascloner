@@ -20,7 +20,7 @@ from .routers import maintenance as maintenance_router
 from .routers import nextcloud as nextcloud_router
 from .routers import runs as runs_router
 from .routers import schedule as schedule_router
-from .scheduler import start_scheduler, stop_scheduler
+from .scheduler import start_scheduler, stop_scheduler, reconcile_stale_runs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +43,10 @@ async def lifespan(app: FastAPI):
     try:
         init_db()
         logger.info("Database initialized")
+
+        reconciled = reconcile_stale_runs()
+        if reconciled > 0:
+            logger.info("Reconciled %d stale run(s) on startup", reconciled)
 
         if start_scheduler():
             logger.info("Scheduler started")

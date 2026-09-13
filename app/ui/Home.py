@@ -147,11 +147,17 @@ if runs and len(runs) > 0:
         start_time = run.get("started_at", "Unknown")
 
         # Status icon and color
-        if run_status == "success":
+        if run_status in ("completed", "success"):
             status_icon = "✅"
         elif run_status == "running":
             status_icon = "🔄"
-        elif run_status == "failed":
+        elif run_status == "pending":
+            status_icon = "⏳"
+        elif run_status in ("aborted", "stopped", "cancelled"):
+            status_icon = "⏹️"
+        elif run_status == "skipped":
+            status_icon = "⏭️"
+        elif run_status in ("failed", "error"):
             status_icon = "❌"
         else:
             status_icon = "❓"

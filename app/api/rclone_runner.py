@@ -435,7 +435,7 @@ class RcloneRunner:
 
         except Exception as e:
             logger.error("Sync operation failed: %s", e)
-            result.status = "error"
+            result.status = "failed"
             result.error_message = str(e)
             return result
 
@@ -471,14 +471,14 @@ class RcloneRunner:
             was_stopped = self.was_stop_requested()
 
             if was_stopped:
-                result.status = "stopped"
-                logger.info("Sync was stopped by user request")
+                result.status = "aborted"
+                logger.info("Sync was aborted by user request")
             elif return_code == 0:
-                result.status = "success"
+                result.status = "completed"
             elif result.errors > 0:
-                result.status = "partial"
+                result.status = "failed"
             else:
-                result.status = "error"
+                result.status = "failed"
 
             logger.info("rclone exited with code: %d", return_code)
 
@@ -495,11 +495,11 @@ class RcloneRunner:
 
         except subprocess.SubprocessError as e:
             logger.error("rclone subprocess error: %s", e)
-            result.status = "error"
+            result.status = "failed"
             result.error_message = str(e)
         except Exception as e:
             logger.error("Unexpected error during rclone execution: %s", e)
-            result.status = "error"
+            result.status = "failed"
             result.error_message = str(e)
         finally:
             # Clear process reference when done

@@ -25,7 +25,7 @@ def test_sync_job_success_lifecycle(fresh_client: TestClient, isolated_fresh_ins
     with api_db.SessionLocal() as session:
         last_run = session.execute(select(Run).order_by(desc(Run.id))).scalars().first()
         assert last_run is not None
-        assert last_run.status == "success"  # Legacy status in current code
+        assert last_run.status == "completed"
         assert last_run.bytes_transferred == 3072
         assert last_run.num_added == 2
         assert last_run.num_updated == 1
@@ -45,7 +45,7 @@ def test_sync_job_success_lifecycle(fresh_client: TestClient, isolated_fresh_ins
     runs_data = runs_res.json()
     assert len(runs_data) >= 1
     assert runs_data[0]["id"] == run_id
-    assert runs_data[0]["status"] == "success"
+    assert runs_data[0]["status"] == "completed"
 
     # 2. GET /runs/{run_id}/logs
     logs_res = fresh_client.get(f"/runs/{run_id}/logs")
@@ -103,4 +103,4 @@ def test_graceful_abort_lifecycle(fresh_client: TestClient, isolated_fresh_insta
             select(Run).where(Run.id == active_run_id)
         ).scalars().first()
         assert stopped_run is not None
-        assert stopped_run.status == "stopped"  # Legacy stopped status
+        assert stopped_run.status == "aborted"

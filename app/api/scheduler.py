@@ -11,13 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import config, get_log_dir
 from .db import get_db_session
-from .models import Run, FileEvent, ConfigKV
+from .models import Run, FileEvent, ConfigKV, SyncStatus
 from .rclone_runner import get_runner, SyncResult
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ _sync_lock = threading.Lock()
 class SyncScheduler:
     """Manages sync job scheduling and execution."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.scheduler = scheduler
         self.runner = get_runner()
     
@@ -182,11 +181,60 @@ def validate_sync_config(sync_config: Dict[str, str]) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def reconcile_stale_runs(session_factory: Optional[Any] = None) -> int:
+    """Startup recovery: reconcile stale non-terminal runs to failed."""
+    get_session = session_factory or get_db_session
+    recovered_count = 0
+    with get_session() as db:
+        stale_runs = db.execute(
+            select(Run).where(Run.status.in_([SyncStatus.PENDING, SyncStatus.RUNNING]))
+        ).scalars().all()
+
+        now_utc = datetime.now(timezone.utc)
+        for run in stale_runs:
+            run.transition_to(
+                SyncStatus.FAILED,
+                message="Interrupted: previous process terminated while run was active (startup recovery)",
+            )
+            run.finished_at = now_utc
+            run.errors = (run.errors or 0) + 1
+            recovered_count += 1
+
+            recovery_event = FileEvent(
+                run_id=run.id,
+                timestamp=now_utc,
+                action="error",
+                file_path="",
+                file_size=0,
+                message="Run recovered on startup: marked failed due to process termination",
+            )
+            db.add(recovery_event)
+
+        if recovered_count > 0:
+            db.commit()
+            logger.warning("Startup recovery: marked %d stale run(s) as failed", recovered_count)
+
+    return recovered_count
+
+
 def sync_job() -> None:
     """Main sync job function."""
     # Acquire lock to prevent concurrent runs
     if not _sync_lock.acquire(blocking=False):
         logger.warning("Sync job already running, skipping this execution")
+        try:
+            with get_db_session() as skip_db:
+                now_utc = datetime.now(timezone.utc)
+                skipped_run = Run(
+                    status=SyncStatus.SKIPPED,
+                    started_at=now_utc,
+                    finished_at=now_utc,
+                    message="Sync job already running, skipping this execution",
+                )
+                skip_db.add(skipped_run)
+                skip_db.commit()
+        except Exception as exc:
+            logger.error("Failed to record skipped sync run: %s", exc)
         return
     
     db: Optional[Session] = None
@@ -230,16 +278,21 @@ def sync_job() -> None:
         # Execute sync
         runner = get_runner()
 
+        # Create durable pending run record
         run = Run(
-            status="running",
+            status=SyncStatus.PENDING,
             log_path=str(log_path)
         )
         db.add(run)
         db.commit()
         db.refresh(run)
         run_id = run.id
+
+        # Transition to RUNNING as execution begins
+        run.transition_to(SyncStatus.RUNNING)
+        db.commit()
         
-        logger.info(f"Created sync run {run_id}")
+        logger.info(f"Created and started sync run {run_id}")
 
         # Set current run info for live monitoring
         runner.set_current_run(run_id, str(log_path))
@@ -261,11 +314,20 @@ def sync_job() -> None:
             # Clear current run info when done
             runner.clear_current_run()
         
+        # Map result status to canonical status
+        raw_status = str(result.status).lower()
+        if raw_status in ("completed", "success"):
+            target_status = SyncStatus.COMPLETED
+        elif raw_status in ("aborted", "stopped"):
+            target_status = SyncStatus.ABORTED
+        else:
+            target_status = SyncStatus.FAILED
+
         # Open fresh session to record completion in a short transaction
         db = get_db_session()
         active_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
         if active_run:
-            active_run.status = result.status
+            active_run.transition_to(target_status, message=getattr(result, "error_message", None))
             active_run.num_added = result.num_added
             active_run.num_updated = result.num_updated
             active_run.bytes_transferred = result.bytes_transferred
@@ -304,7 +366,7 @@ def sync_job() -> None:
                     db = get_db_session()
                 failed_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
                 if failed_run:
-                    failed_run.status = "error"
+                    failed_run.transition_to(SyncStatus.FAILED, message=f"Sync job error: {str(e)}")
                     failed_run.finished_at = datetime.now(timezone.utc)
                     
                     # Add error event
