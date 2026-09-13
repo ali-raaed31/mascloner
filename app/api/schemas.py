@@ -135,7 +135,7 @@ class RcloneConfigRequest(BaseModel):
     drive_upload_cutoff: Optional[str] = Field(None, description="Threshold for chunked uploads (e.g. 128M)")
     fast_list: bool = Field(False, description="Toggle rclone --fast-list optimisation")
 
-    @field_validator("buffer_size", "drive_chunk_size", "drive_upload_cutoff")
+    @field_validator("buffer_size", "drive_upload_cutoff")
     @classmethod
     def _validate_size_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -146,6 +146,12 @@ class RcloneConfigRequest(BaseModel):
         if not SIZE_REGEX.match(stripped):
             raise ValueError(f"Invalid size string {v!r}. Must be a valid byte/size specification (e.g. 32Mi, 64M, 128M).")
         return stripped
+
+    @field_validator("drive_chunk_size")
+    @classmethod
+    def _validate_drive_chunk_size(cls, v: Optional[str]) -> Optional[str]:
+        from ..configuration.models import validate_drive_chunk_size
+        return validate_drive_chunk_size(v)
 
 
 class GoogleDriveOAuthRequest(BaseModel):

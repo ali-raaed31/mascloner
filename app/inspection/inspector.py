@@ -96,10 +96,19 @@ class EndpointInspector:
         effective_timeout = timeout or self._default_timeout
         cmd = [self._rclone_bin, "--config", str(config_path)] + args
 
+        env = dict(os.environ)
+        if "RCLONE_DRIVE_CHUNK_SIZE" in env:
+            try:
+                from ..configuration.models import validate_drive_chunk_size
+                validate_drive_chunk_size(env["RCLONE_DRIVE_CHUNK_SIZE"])
+            except Exception:
+                env["RCLONE_DRIVE_CHUNK_SIZE"] = "64M"
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
 
         try:
@@ -134,7 +143,7 @@ class EndpointInspector:
     async def test_connection(
         self, endpoint: Union[str, EndpointConcept], timeout: Optional[float] = None
     ) -> ConnectionTestResult:
-        """Test connection against managed endpoint without modifying live state."""
+        """Test connection to fixed endpoint without modifying configuration or data."""
         remote = self._validate_endpoint(endpoint)
         start_time = time.monotonic()
 
@@ -146,7 +155,7 @@ class EndpointInspector:
                 error_category="unconfigured",
             )
 
-        cmd_args = ["lsd", f"{remote}:", "--max-depth=1"] if remote == "ncwebdav" else ["about", f"{remote}:"]
+        cmd_args = ["lsd", f"{remote}:", "--max-depth=1"] if remote == "ncwebdav" else ["about", f"{remote}:", "--drive-chunk-size=64M"]
 
         try:
             retcode, stdout, stderr = await self._run_rclone(
@@ -218,7 +227,7 @@ class EndpointInspector:
 
             try:
                 retcode, stdout, stderr = await self._run_rclone(
-                    ["about", "gdrive:"], tmp_conf, timeout=timeout, secrets=secrets
+                    ["about", "gdrive:", "--drive-chunk-size=64M"], tmp_conf, timeout=timeout, secrets=secrets
                 )
                 duration_ms = round((time.monotonic() - start_time) * 1000, 2)
                 if retcode == 0:
@@ -342,6 +351,8 @@ class EndpointInspector:
 
         target = f"{remote}:{clean_path}" if clean_path else f"{remote}:"
         args = ["lsd", target, "--max-depth=1"]
+        if remote == "gdrive":
+            args.append("--drive-chunk-size=64M")
 
         try:
             retcode, stdout, stderr = await self._run_rclone(args, self._rclone_conf, timeout=timeout)
@@ -481,7 +492,7 @@ class EndpointInspector:
 
         try:
             retcode, stdout, stderr = await self._run_rclone(
-                ["size", target, "--json"], self._rclone_conf, timeout=timeout
+                ["size", target, "--json", "--drive-chunk-size=64M"], self._rclone_conf, timeout=timeout
             )
             duration_ms = round((time.monotonic() - start_time) * 1000, 2)
 
