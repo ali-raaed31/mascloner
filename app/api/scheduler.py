@@ -31,7 +31,15 @@ class SyncScheduler:
     
     def __init__(self) -> None:
         self.scheduler = scheduler
-        self.runner = get_runner()
+
+    @property
+    def runner(self):
+        from .rclone_runner import get_runner
+        return getattr(self, "_runner", None) or get_runner()
+
+    @runner.setter
+    def runner(self, value):
+        self._runner = value
     
     def start(self) -> None:
         """Start the scheduler."""
@@ -120,13 +128,12 @@ class SyncScheduler:
             return None
     
     def trigger_sync_now(self) -> bool:
-        """Trigger an immediate sync run."""
+        """Trigger an immediate sync run using SyncExecutor."""
         try:
-            # Run sync job in a separate thread to avoid blocking
-            sync_thread = threading.Thread(target=sync_job, daemon=True)
-            sync_thread.start()
-            logger.info("Manual sync triggered")
-            return True
+            from ..execution import SyncExecutor
+            res = SyncExecutor.get_instance().trigger_manual_run()
+            logger.info("Manual sync triggered via SyncExecutor: accepted=%s", res.accepted)
+            return res.accepted
         except Exception as e:
             logger.error("Failed to trigger manual sync: %s", e)
             return False
@@ -217,181 +224,31 @@ def reconcile_stale_runs(session_factory: Optional[Any] = None) -> int:
     return recovered_count
 
 
-def sync_job() -> None:
-    """Main sync job function."""
-    # Acquire lock to prevent concurrent runs
-    if not _sync_lock.acquire(blocking=False):
-        logger.warning("Sync job already running, skipping this execution")
-        try:
-            with get_db_session() as skip_db:
-                now_utc = datetime.now(timezone.utc)
-                skipped_run = Run(
-                    status=SyncStatus.SKIPPED,
-                    started_at=now_utc,
-                    finished_at=now_utc,
-                    message="Sync job already running, skipping this execution",
-                )
-                skip_db.add(skipped_run)
-                skip_db.commit()
-        except Exception as exc:
-            logger.error("Failed to record skipped sync run: %s", exc)
-        return
-    
-    db: Optional[Session] = None
-    run: Optional[Run] = None
-    
+def sync_job(wait: bool = True) -> Any:
+    """Main scheduled sync job function executing through SyncExecutor."""
+    from ..execution import SyncExecutor
+
+    logger.info("Starting scheduled sync job through SyncExecutor")
     try:
-        logger.info("Starting sync job")
-        
-        # Get database session
-        db = get_db_session()
-        
-        # Get sync configuration
-        sync_config = get_sync_config_from_db(db)
-        
-        # Validate configuration
-        config_valid, config_errors = validate_sync_config(sync_config)
-        if not config_valid:
-            logger.error(f"Invalid sync configuration: {config_errors}")
-            return
-        
-        # Capture immutable snapshot for this execution
-        try:
-            from ..configuration import Configuration
-
-            cfg_module = Configuration(session_factory=get_db_session)
-            paths_snapshot, perf_snapshot = cfg_module.create_run_snapshot()
-            sync_paths_src = paths_snapshot.gdrive_src or sync_config["gdrive_src"]
-            sync_paths_dest = paths_snapshot.nc_dest_path or sync_config["nc_dest_path"]
-        except Exception as exc:
-            logger.warning("Failed to create configuration snapshot: %s", exc)
-            perf_snapshot = None
-            sync_paths_src = sync_config["gdrive_src"]
-            sync_paths_dest = sync_config["nc_dest_path"]
-
-        # Create run record
-        log_dir = get_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_filename = f"sync-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
-        log_path = log_dir / log_filename
-
-        # Execute sync
-        runner = get_runner()
-
-        # Create durable pending run record
-        run = Run(
-            status=SyncStatus.PENDING,
-            log_path=str(log_path)
-        )
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-        run_id = run.id
-
-        # Transition to RUNNING as execution begins
-        run.transition_to(SyncStatus.RUNNING)
-        db.commit()
-        
-        logger.info(f"Created and started sync run {run_id}")
-
-        # Set current run info for live monitoring
-        runner.set_current_run(run_id, str(log_path))
-
-        # Short transaction boundary: close session before long subprocess execution
-        db.close()
-        db = None
-
-        from ..configuration.lease import get_process_lease
-        lease = get_process_lease()
-        try:
-            with lease.acquire(holder="SyncRun", timeout=5.0):
-                result = runner.run_sync(
-                    gdrive_remote=sync_config["gdrive_remote"],
-                    gdrive_src=sync_paths_src,
-                    nc_remote=sync_config["nc_remote"],
-                    nc_dest_path=sync_paths_dest,
-                    dry_run=False,
-                    performance_snapshot=perf_snapshot,
-                )
-        finally:
-            # Clear current run info when done
-            runner.clear_current_run()
-        
-        # Map result status to canonical status
-        raw_status = str(result.status).lower()
-        if raw_status in ("completed", "success"):
-            target_status = SyncStatus.COMPLETED
-        elif raw_status in ("aborted", "stopped"):
-            target_status = SyncStatus.ABORTED
+        executor = SyncExecutor.get_instance()
+        result = executor.trigger_scheduled_run(wait=wait)
+        if not result.accepted:
+            logger.warning(
+                "Scheduled sync run skipped or rejected (run %s): %s",
+                result.run_id,
+                result.message,
+            )
         else:
-            target_status = SyncStatus.FAILED
-
-        # Open fresh session to record completion in a short transaction
-        db = get_db_session()
-        active_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
-        if active_run:
-            active_run.transition_to(target_status, message=getattr(result, "error_message", None))
-            active_run.num_added = result.num_added
-            active_run.num_updated = result.num_updated
-            active_run.bytes_transferred = result.bytes_transferred
-            active_run.errors = result.errors
-            active_run.finished_at = datetime.now(timezone.utc)
-            
-            # Add file events unless lightweight mode is enabled
-            lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
-            if not lightweight_events:
-                for event in result.events:
-                    file_event = FileEvent(
-                        run_id=active_run.id,
-                        timestamp=event.timestamp,
-                        action=event.action,
-                        file_path=event.file_path,
-                        file_size=event.file_size,
-                        file_hash=event.file_hash,
-                        message=event.message
-                    )
-                    db.add(file_event)
-            
-            db.commit()
-        
-        logger.info(f"Sync job completed: {result.status}")
-        logger.info(f"Files: {result.num_added} added, {result.num_updated} updated")
-        logger.info(f"Bytes transferred: {result.bytes_transferred}")
-        logger.info(f"Errors: {result.errors}")
-        
-    except Exception as e:
-        logger.error(f"Sync job failed: {e}")
-        
-        # Update run status if we have a run record
-        if 'run_id' in locals() and run_id:
-            try:
-                if not db:
-                    db = get_db_session()
-                failed_run = db.execute(select(Run).where(Run.id == run_id)).scalars().first()
-                if failed_run:
-                    failed_run.transition_to(SyncStatus.FAILED, message=f"Sync job error: {str(e)}")
-                    failed_run.finished_at = datetime.now(timezone.utc)
-                    
-                    # Add error event
-                    error_event = FileEvent(
-                        run_id=run_id,
-                        timestamp=datetime.now(timezone.utc),
-                        action="error",
-                        file_path="",
-                        file_size=0,
-                        message=f"Sync job error: {str(e)}"
-                    )
-                    db.add(error_event)
-                    db.commit()
-            except Exception as commit_error:
-                logger.error(f"Failed to update run status: {commit_error}")
-    
-    finally:
-        # Clean up
-        if db:
-            db.close()
-        _sync_lock.release()
-        logger.info("Sync job finished")
+            logger.info(
+                "Scheduled sync run %s status: %s (%s)",
+                result.run_id,
+                result.status,
+                result.message,
+            )
+        return result
+    except Exception as exc:
+        logger.error("Error executing scheduled sync job: %s", exc)
+        return None
 
 
 def cleanup_old_runs(db: Session, keep_runs: int = 100) -> int:

@@ -41,6 +41,8 @@ async def lifespan(app: FastAPI):
         )
 
     try:
+        from ..execution import SyncExecutor
+        SyncExecutor.reset_instance()
         init_db()
         logger.info("Database initialized")
 
@@ -66,6 +68,15 @@ async def lifespan(app: FastAPI):
             logger.warning("Failed to stop scheduler cleanly")
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Shutdown error: %s", exc)
+
+    try:
+        from ..execution import SyncExecutor
+        executor = SyncExecutor.get_instance()
+        executor.shutdown(timeout=10.0)
+        SyncExecutor.reset_instance()
+        logger.info("SyncExecutor shutdown completed")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("SyncExecutor shutdown error: %s", exc)
 
 
 app = FastAPI(

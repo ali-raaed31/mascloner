@@ -78,6 +78,7 @@ class SyncExecutor:
         self._snapshot_lock = threading.Lock()
         self._current_snapshot: Optional[ActiveRunSnapshot] = None
         self._execution_thread: Optional[threading.Thread] = None
+        self._is_shutting_down = False
 
     @classmethod
     def get_instance(
@@ -102,9 +103,9 @@ class SyncExecutor:
     def reset_instance(cls) -> None:
         """Reset singleton for tests."""
         with cls._instance_lock:
-            if cls._instance and cls._instance.is_running():
+            if cls._instance is not None:
                 try:
-                    cls._instance.request_abort()
+                    cls._instance.shutdown(timeout=2.0)
                 except Exception:
                     pass
             cls._instance = None
@@ -126,6 +127,11 @@ class SyncExecutor:
         with self._run_lock:
             return self._active_run_id is not None
 
+    def is_shutting_down(self) -> bool:
+        """Return True if executor has started shutting down."""
+        with self._run_lock:
+            return self._is_shutting_down
+
     def get_active_run_id(self) -> Optional[int]:
         """Return active run ID if one is executing."""
         with self._run_lock:
@@ -133,19 +139,32 @@ class SyncExecutor:
 
     # --- Triggering execution ---
 
-    def trigger_manual_run(self, dry_run: bool = False) -> TriggerResult:
-        """Trigger a manual SyncRun enforcing canonical single-active-run lifecycle."""
+    def trigger_run(
+        self,
+        trigger_type: str = "manual",
+        dry_run: bool = False,
+        wait: bool = False,
+    ) -> TriggerResult:
+        """Trigger a SyncRun enforcing canonical single-active-run lifecycle."""
         with self._run_lock:
+            if self._is_shutting_down:
+                logger.warning("Sync request rejected: SyncExecutor is shutting down")
+                return TriggerResult(
+                    accepted=False,
+                    run_id=None,
+                    status=SyncStatus.SKIPPED,
+                    message="SyncExecutor is shutting down",
+                )
+
             # 1. Deterministic overlap policy: check if already active
             if self._active_run_id is not None:
-                # Record skipped run in database
                 with self._session_factory() as db:
                     now = _utc_now()
                     skipped_run = Run(
                         status=SyncStatus.SKIPPED,
                         started_at=now,
                         finished_at=now,
-                        message="Sync run skipped: another synchronization run is currently active",
+                        message=f"Sync run skipped: another synchronization run is currently active ({trigger_type} trigger)",
                     )
                     db.add(skipped_run)
                     db.commit()
@@ -153,9 +172,10 @@ class SyncExecutor:
                     skipped_id = skipped_run.id
 
                 logger.warning(
-                    "Sync request rejected: run %d already active; recorded skipped run %d",
+                    "Sync request rejected: run %d already active; recorded skipped run %d (%s trigger)",
                     self._active_run_id,
                     skipped_id,
+                    trigger_type,
                 )
                 return TriggerResult(
                     accepted=False,
@@ -175,7 +195,7 @@ class SyncExecutor:
                         status=SyncStatus.SKIPPED,
                         started_at=now,
                         finished_at=now,
-                        message="Sync run skipped: another synchronization run is marked active in database",
+                        message=f"Sync run skipped: another synchronization run is marked active in database ({trigger_type} trigger)",
                     )
                     db.add(skipped_run)
                     db.commit()
@@ -197,7 +217,7 @@ class SyncExecutor:
                     status=SyncStatus.PENDING,
                     started_at=_utc_now(),
                     log_path=str(log_file),
-                    message="Sync queued for execution",
+                    message=f"{trigger_type.capitalize()} sync queued for execution",
                 )
                 db.add(run)
                 db.commit()
@@ -223,24 +243,47 @@ class SyncExecutor:
                     status=SyncStatus.PENDING,
                     started_at=_utc_now(),
                     is_active=True,
-                    message="Sync queued for execution",
+                    message=f"{trigger_type.capitalize()} sync queued for execution",
                 )
 
-            self._execution_thread = threading.Thread(
+            worker_thread = threading.Thread(
                 target=self._run_worker,
                 args=(run_id, log_file, paths_snapshot, perf_snapshot, dry_run),
                 daemon=True,
                 name=f"SyncExecutor-{run_id}",
             )
-            self._execution_thread.start()
+            self._execution_thread = worker_thread
+            worker_thread.start()
 
-            logger.info("SyncExecutor: started manual run %d", run_id)
+            logger.info("SyncExecutor: started %s run %d", trigger_type, run_id)
+
+        if wait:
+            worker_thread.join()
+            with self._session_factory() as db:
+                fin_run = db.get(Run, run_id)
+                status_res = fin_run.status if fin_run else SyncStatus.COMPLETED
+                msg_res = fin_run.message if fin_run else "Sync execution finished"
             return TriggerResult(
                 accepted=True,
                 run_id=run_id,
-                status=SyncStatus.PENDING,
-                message="Sync triggered successfully",
+                status=status_res,
+                message=msg_res,
             )
+
+        return TriggerResult(
+            accepted=True,
+            run_id=run_id,
+            status=SyncStatus.PENDING,
+            message="Sync triggered successfully",
+        )
+
+    def trigger_manual_run(self, dry_run: bool = False, wait: bool = False) -> TriggerResult:
+        """Trigger a manual SyncRun."""
+        return self.trigger_run(trigger_type="manual", dry_run=dry_run, wait=wait)
+
+    def trigger_scheduled_run(self, dry_run: bool = False, wait: bool = False) -> TriggerResult:
+        """Trigger a scheduled SyncRun."""
+        return self.trigger_run(trigger_type="schedule", dry_run=dry_run, wait=wait)
 
     # --- Background worker ---
 
@@ -293,8 +336,18 @@ class SyncExecutor:
                 dry_run=dry_run,
             )
 
+            # Check if abort or shutdown happened before lease/launch
+            if self._abort_requested or self._is_shutting_down:
+                terminal_status = SyncStatus.ABORTED
+                terminal_message = "Sync aborted prior to launch"
+                return
+
             # 3. Hold ConfigurationLease for the subprocess lifetime
             with lease.acquire(holder=f"SyncRun-{run_id}", timeout=5.0):
+                if self._abort_requested or self._is_shutting_down:
+                    terminal_status = SyncStatus.ABORTED
+                    terminal_message = "Sync aborted prior to launch"
+                    return
                 logger.info("SyncExecutor: acquired lease for run %d, launching rclone", run_id)
 
                 try:
@@ -390,9 +443,9 @@ class SyncExecutor:
                         logger.warning("SyncExecutor: failed reading log file %s: %s", log_file_path, err)
 
                 # 5. Determine terminal status
-                if self._abort_requested:
+                if self._abort_requested or self._is_shutting_down or retcode in (-signal.SIGTERM, -signal.SIGKILL, 143, 137):
                     terminal_status = SyncStatus.ABORTED
-                    terminal_message = "Sync aborted by user request"
+                    terminal_message = "Sync aborted: user stop requested or service shutdown"
                 elif retcode == 0:
                     terminal_status = SyncStatus.COMPLETED
                     terminal_message = "Sync completed successfully"
@@ -485,11 +538,11 @@ class SyncExecutor:
     def request_abort(self, run_id: Optional[int] = None) -> AbortResult:
         """Request graceful abort of the currently executing run."""
         with self._run_lock:
-            if self._active_run_id is None or self._active_process is None:
+            if self._active_run_id is None:
                 return AbortResult(
                     requested=False,
                     run_id=run_id,
-                    message="No active sync process to abort",
+                    message="No active sync run to abort",
                 )
 
             if run_id is not None and self._active_run_id != run_id:
@@ -502,13 +555,14 @@ class SyncExecutor:
             target_id = self._active_run_id
             self._abort_requested = True
 
-            try:
-                self._active_process.send_signal(signal.SIGTERM)
-                logger.info("SyncExecutor: sent SIGTERM to process for run %d", target_id)
-            except ProcessLookupError:
-                pass
-            except Exception as exc:
-                logger.error("SyncExecutor: failed to send SIGTERM to run %d: %s", target_id, exc)
+            if self._active_process is not None:
+                try:
+                    self._active_process.send_signal(signal.SIGTERM)
+                    logger.info("SyncExecutor: sent SIGTERM to process for run %d", target_id)
+                except ProcessLookupError:
+                    pass
+                except Exception as exc:
+                    logger.error("SyncExecutor: failed to send SIGTERM to run %d: %s", target_id, exc)
 
             return AbortResult(
                 requested=True,
@@ -573,3 +627,58 @@ class SyncExecutor:
             logger.error("SyncExecutor: failed to read log file %s: %s", log_path, exc)
 
         return logs, next_line, is_live
+
+
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Gracefully shut down executor, terminating active run within timeout."""
+        with self._run_lock:
+            self._is_shutting_down = True
+            active_id = self._active_run_id
+            thread = self._execution_thread
+            proc = self._active_process
+
+        if active_id is not None:
+            logger.info("SyncExecutor shutdown: terminating active run %d within %.1fs", active_id, timeout)
+            self.request_abort(active_id)
+
+            if thread and thread.is_alive():
+                thread.join(timeout=timeout)
+
+            with self._run_lock:
+                proc = self._active_process
+            if proc and proc.poll() is None:
+                logger.warning("SyncExecutor shutdown: process did not exit within timeout; killing with SIGKILL")
+                try:
+                    proc.kill()
+                except Exception as exc:
+                    logger.error("SyncExecutor shutdown: error killing process: %s", exc)
+
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+
+            try:
+                with self._session_factory() as db:
+                    run = db.get(Run, active_id)
+                    if run and run.status in (SyncStatus.PENDING, SyncStatus.RUNNING):
+                        now = _utc_now()
+                        run.transition_to(
+                            SyncStatus.ABORTED,
+                            message="Sync aborted: service shutdown",
+                        )
+                        run.finished_at = now
+                        db.commit()
+                        logger.info("SyncExecutor shutdown: marked run %d as aborted", active_id)
+            except Exception as exc:
+                logger.error("SyncExecutor shutdown: error updating database for run %d: %s", active_id, exc)
+
+        with self._snapshot_lock:
+            if self._current_snapshot and self._current_snapshot.is_active:
+                self._current_snapshot = ActiveRunSnapshot(
+                    run_id=self._current_snapshot.run_id,
+                    status=SyncStatus.ABORTED,
+                    started_at=self._current_snapshot.started_at,
+                    is_active=False,
+                    message="Sync aborted: service shutdown",
+                )
+
+        logger.info("SyncExecutor shutdown complete")

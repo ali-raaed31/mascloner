@@ -109,12 +109,24 @@ class ProcessStateReset:
         api_scheduler.sync_scheduler.runner = api_runner.get_runner()
         reset_dependencies()
 
+        try:
+            from app.execution import SyncExecutor
+            SyncExecutor.reset_instance()
+        except Exception:
+            pass
+
     def restore(self) -> None:
         """Restore original environment and references."""
         # Stop scheduler if running
         try:
             if api_scheduler.sync_scheduler.scheduler.running:
                 api_scheduler.sync_scheduler.stop()
+        except Exception:
+            pass
+
+        try:
+            from app.execution import SyncExecutor
+            SyncExecutor.reset_instance()
         except Exception:
             pass
 

@@ -48,7 +48,7 @@ class TriggerResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     accepted: bool
-    run_id: int
+    run_id: Optional[int] = None
     status: str
     message: str
 
