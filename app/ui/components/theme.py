@@ -153,3 +153,21 @@ def render_hero_bar(api_client) -> None:
         st.caption("Sync Runs Recorded")
 
     st.divider()
+
+
+def generate_run_csv(events: list[dict[str, Any]]) -> str:
+    """Generate CSV string from file events list."""
+    import csv, io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Timestamp", "Action", "File Path", "Size (Bytes)", "Message"])
+    for ev in events:
+        writer.writerow([
+            ev.get("id", ""),
+            ev.get("timestamp", ""),
+            ev.get("action", ""),
+            ev.get("file_path", ""),
+            ev.get("file_size", 0),
+            ev.get("message", "") or "",
+        ])
+    return output.getvalue()

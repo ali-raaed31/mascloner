@@ -132,9 +132,14 @@ class APIClient:
         """Stop the scheduler."""
         return self._make_request("POST", "/schedule/stop")
 
-    def get_runs(self, limit: int = 50) -> Optional[Dict[str, Any]]:
-        """Get sync runs."""
-        return self._make_request("GET", f"/runs?limit={limit}")
+    def get_runs(
+        self, limit: int = 50, status: Optional[str] = None
+    ) -> Optional[Any]:
+        """Get sync runs, optionally filtered by status."""
+        params: Dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        return self._make_request("GET", "/runs", params=params)
 
     def trigger_sync(self) -> Optional[Dict[str, Any]]:
         """Trigger manual sync."""

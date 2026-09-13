@@ -178,8 +178,13 @@ st.divider()
 
 # 5. Last Completed Sync Summary
 st.subheader("🏁 Last Sync Execution")
-recent_runs_resp = api.get_runs(limit=1) or {}
-recent_runs = recent_runs_resp.get("runs", [])
+raw_recent = api.get_runs(limit=1)
+if isinstance(raw_recent, list):
+    recent_runs = raw_recent
+elif isinstance(raw_recent, dict):
+    recent_runs = raw_recent.get("runs", [])
+else:
+    recent_runs = []
 
 if not recent_runs:
     st.info("No sync runs recorded yet. Click 'Sync Now' above to trigger your first run.")
