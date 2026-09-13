@@ -19,9 +19,10 @@ from .exceptions import (
     ConfigurationStoreError,
     ConfigurationValidationError,
 )
-from .lease import ConfigurationLease
+from .lease import ConfigurationLease, get_process_lease
 from .models import (
     BootstrapSettings,
+    GoogleDriveSourceDraft,
     EffectiveConfiguration,
     EndpointMetadata,
     RclonePerformanceSettings,
@@ -64,6 +65,7 @@ class Configuration:
         db_session_factory: Optional[Callable[[], Session]] = None,
         rclone_conf_path: Optional[Path] = None,
         session_factory: Optional[Callable[[], Session]] = None,
+        lease: Optional[ConfigurationLease] = None,
     ) -> None:
         if base_dir:
             resolved_base = Path(base_dir)
@@ -101,7 +103,7 @@ class Configuration:
         self._rclone_adapter = RcloneConfStoreAdapter(conf_path=resolved_rclone_conf)
 
         # Process-wide lease
-        self._lease = ConfigurationLease()
+        self._lease = lease or get_process_lease()
 
     @property
     def lease(self) -> ConfigurationLease:
@@ -399,3 +401,120 @@ class Configuration:
             "matches": len(discrepancies) == 0,
             "discrepancies": discrepancies,
         }
+
+    # --- GoogleDriveSource management (rclone.conf) ---
+    def validate_google_drive_draft(
+        self, draft: Union[GoogleDriveSourceDraft, Dict[str, Any]]
+    ) -> None:
+        """Validate GoogleDriveSource draft in an isolated temporary configuration.
+
+        Ensures caller cannot specify custom remote names and never touches live configuration.
+        """
+        if isinstance(draft, dict):
+            remote = draft.get("remote_name") or draft.get("remote")
+            if remote and remote != "gdrive":
+                raise ConfigurationValidationError(
+                    f"Caller-specified remote name {remote!r} is not supported. "
+                    "Only the fixed 'gdrive' remote is permitted for GoogleDriveSource."
+                )
+        typed_draft = _coerce_model(GoogleDriveSourceDraft, draft)
+        self._rclone_adapter.validate_draft(
+            typed_draft, rclone_bin=self._bootstrap.rclone_bin_path
+        )
+
+    def promote_google_drive_source(
+        self, draft: Union[GoogleDriveSourceDraft, Dict[str, Any]], timeout: float = 2.0
+    ) -> None:
+        """Atomically promote validated draft to managed rclone.conf under Configuration lease."""
+        if isinstance(draft, dict):
+            remote = draft.get("remote_name") or draft.get("remote")
+            if remote and remote != "gdrive":
+                raise ConfigurationValidationError(
+                    f"Caller-specified remote name {remote!r} is not supported. "
+                    "Only the fixed 'gdrive' remote is permitted for GoogleDriveSource."
+                )
+        typed_draft = _coerce_model(GoogleDriveSourceDraft, draft)
+
+        with self.acquire_lease(holder="GoogleDriveSourceConfiguration", timeout=timeout):
+            # 1. Validate in isolated temp config
+            self._rclone_adapter.validate_draft(
+                typed_draft, rclone_bin=self._bootstrap.rclone_bin_path
+            )
+            # 2. Promote atomically to managed rclone.conf
+            self._rclone_adapter.promote_draft(typed_draft)
+
+    def get_google_drive_oauth_credentials(self) -> Dict[str, Any]:
+        """Return safe metadata for configured OAuth credentials without exposing secrets."""
+        meta = self.get_endpoint_metadata("gdrive")
+        client_id = None
+        has_secret = False
+
+        if meta and meta.details:
+            client_id = meta.details.get("client_id")
+            has_secret = meta.details.get("client_secret_configured") == "true"
+
+        return {
+            "client_id": client_id,
+            "client_secret": "***" if has_secret else None,
+            "has_custom_oauth": bool(client_id and has_secret),
+        }
+
+    def save_google_drive_oauth_credentials(
+        self, client_id: str, client_secret: str, timeout: float = 2.0
+    ) -> None:
+        """Save custom OAuth client credentials under lease with restrictive permissions."""
+        client_id = client_id.strip()
+        client_secret = client_secret.strip()
+        if not client_id or not client_secret:
+            raise ConfigurationValidationError("Both client_id and client_secret are required")
+
+        with self.acquire_lease(holder="GoogleDriveOAuthCredentials", timeout=timeout):
+            # Read existing gdrive section or prepare empty draft
+            meta = self.get_endpoint_metadata("gdrive")
+            existing_token = "{}"
+            existing_scope = "drive.readonly"
+            if self._rclone_adapter.conf_path.exists():
+                import configparser
+                parser = configparser.RawConfigParser(interpolation=None)
+                parser.optionxform = str
+                parser.read(self._rclone_adapter.conf_path, encoding="utf-8")
+                if parser.has_section("gdrive"):
+                    existing_token = parser.get("gdrive", "token", fallback="{}")
+                    existing_scope = parser.get("gdrive", "scope", fallback="drive.readonly")
+
+            # Update rclone.conf directly with 0600 permissions
+            parser = configparser.RawConfigParser(interpolation=None)
+            parser.optionxform = str
+            if self._rclone_adapter.conf_path.exists():
+                parser.read(self._rclone_adapter.conf_path, encoding="utf-8")
+            if not parser.has_section("gdrive"):
+                parser.add_section("gdrive")
+            parser.set("gdrive", "type", "drive")
+            parser.set("gdrive", "scope", existing_scope)
+            if existing_token and existing_token != "{}":
+                parser.set("gdrive", "token", existing_token)
+            parser.set("gdrive", "client_id", client_id)
+            parser.set("gdrive", "client_secret", client_secret)
+
+            import tempfile
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    dir=str(self._rclone_adapter.conf_path.parent),
+                    delete=False,
+                    encoding="utf-8",
+                ) as tf:
+                    parser.write(tf)
+                    tf.flush()
+                    os.fsync(tf.fileno())
+                    tmp_path = Path(tf.name)
+                os.chmod(tmp_path, 0o600)
+                os.replace(tmp_path, self._rclone_adapter.conf_path)
+                os.chmod(self._rclone_adapter.conf_path, 0o600)
+            finally:
+                if tmp_path and tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass

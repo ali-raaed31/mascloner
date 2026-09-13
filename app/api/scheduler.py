@@ -301,15 +301,18 @@ def sync_job() -> None:
         db.close()
         db = None
 
+        from ..configuration.lease import get_process_lease
+        lease = get_process_lease()
         try:
-            result = runner.run_sync(
-                gdrive_remote=sync_config["gdrive_remote"],
-                gdrive_src=sync_paths_src,
-                nc_remote=sync_config["nc_remote"],
-                nc_dest_path=sync_paths_dest,
-                dry_run=False,
-                performance_snapshot=perf_snapshot,
-            )
+            with lease.acquire(holder="SyncRun", timeout=5.0):
+                result = runner.run_sync(
+                    gdrive_remote=sync_config["gdrive_remote"],
+                    gdrive_src=sync_paths_src,
+                    nc_remote=sync_config["nc_remote"],
+                    nc_dest_path=sync_paths_dest,
+                    dry_run=False,
+                    performance_snapshot=perf_snapshot,
+                )
         finally:
             # Clear current run info when done
             runner.clear_current_run()

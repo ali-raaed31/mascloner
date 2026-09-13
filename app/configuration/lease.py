@@ -93,3 +93,20 @@ class ConfigurationLease:
             self._acquired_at = None
             self._lock.release()
             self._async_lock.release()
+
+
+_global_process_lease: Optional[ConfigurationLease] = None
+
+
+def get_process_lease() -> ConfigurationLease:
+    """Return the process-wide ConfigurationLease singleton."""
+    global _global_process_lease
+    if _global_process_lease is None:
+        _global_process_lease = ConfigurationLease()
+    return _global_process_lease
+
+
+def reset_process_lease() -> None:
+    """Reset the process-wide ConfigurationLease singleton (primarily for tests)."""
+    global _global_process_lease
+    _global_process_lease = ConfigurationLease()

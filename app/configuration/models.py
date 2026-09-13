@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -174,3 +175,45 @@ class EffectiveConfiguration(BaseModel):
     paths: SyncPathsSettings
     retention: RetentionPolicySettings
     endpoints: Dict[str, EndpointMetadata]
+
+
+class GoogleDriveSourceDraft(BaseModel):
+    """Candidate draft for configuring the fixed GoogleDriveSource.
+
+    Per ADR 0004: Caller cannot specify custom remote names. Remote is strictly 'gdrive'.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    scope: str = "drive.readonly"
+    team_drive: Optional[str] = None
+
+    @field_validator("token")
+    @classmethod
+    def _validate_token(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Token cannot be empty")
+        try:
+            parsed = json.loads(v) if isinstance(v, str) else v
+            if not isinstance(parsed, dict):
+                raise ValueError("Token must be a JSON object")
+            if "access_token" not in parsed:
+                raise ValueError("Token JSON must contain an 'access_token'")
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"Token is not valid JSON: {exc}")
+        return json.dumps(parsed, separators=(",", ":"))
+
+    @field_validator("scope")
+    @classmethod
+    def _validate_scope(cls, v: str) -> str:
+        allowed = {"drive", "drive.readonly", "drive.file", "drive.appdata", "drive.metadata.readonly"}
+        if v not in allowed:
+            raise ValueError(f"Invalid Google Drive scope {v!r}. Allowed: {sorted(allowed)}")
+        return v
+
+    def __repr__(self) -> str:
+        cid = self.client_id[:10] + "..." if self.client_id else None
+        return f"GoogleDriveSourceDraft(scope={self.scope!r}, client_id={cid!r}, client_secret='***', token='***')"

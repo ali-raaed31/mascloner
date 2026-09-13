@@ -10,15 +10,42 @@ from __future__ import annotations
 
 import configparser
 import os
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import json
+from typing import Iterable
 from app.api.models import ConfigKV
+
+def redact_secrets(text: str, secrets: Iterable[Optional[str]]) -> str:
+    """Replace occurrences of sensitive secrets with '***'."""
+    if not text:
+        return text
+    result = text
+    for sec in secrets:
+        if not sec or not isinstance(sec, str):
+            continue
+        cleaned = sec.strip()
+        if len(cleaned) >= 4:
+            result = result.replace(cleaned, "***")
+            if cleaned.startswith("{") and cleaned.endswith("}"):
+                try:
+                    parsed = json.loads(cleaned)
+                    if isinstance(parsed, dict):
+                        for v in parsed.values():
+                            if isinstance(v, str) and len(v) >= 4:
+                                result = result.replace(v, "***")
+                except Exception:
+                    pass
+    return result
 from .exceptions import ConfigurationStoreError, ConfigurationValidationError
 from .models import (
     BootstrapSettings,
+    GoogleDriveSourceDraft,
     EndpointMetadata,
     RclonePerformanceSettings,
     RetentionPolicySettings,
@@ -274,6 +301,9 @@ class SqliteStoreAdapter:
                 raise ConfigurationStoreError(f"Failed to persist retention policy: {exc}") from exc
 
 
+
+
+
 class RcloneConfStoreAdapter:
     """Private store adapter for the managed rclone.conf file."""
 
@@ -313,3 +343,146 @@ class RcloneConfStoreAdapter:
             )
 
         return endpoints
+
+
+
+    def validate_draft(
+        self, draft: GoogleDriveSourceDraft, rclone_bin: Path | str = "rclone"
+    ) -> bool:
+        """Validate candidate draft in an isolated temporary rclone config file.
+
+        The live configuration at self.conf_path is never mutated or opened for writing.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_conf_path = Path(tmpdir) / "rclone.conf"
+            cp = configparser.RawConfigParser(interpolation=None)
+            cp.optionxform = str
+            cp.add_section("gdrive")
+            cp.set("gdrive", "type", "drive")
+            cp.set("gdrive", "scope", draft.scope)
+            cp.set("gdrive", "token", draft.token)
+
+            existing_client_id = None
+            existing_client_secret = None
+            if self.conf_path.exists():
+                try:
+                    live_cp = configparser.RawConfigParser(interpolation=None)
+                    live_cp.optionxform = str
+                    live_cp.read(self.conf_path, encoding="utf-8")
+                    if live_cp.has_section("gdrive"):
+                        existing_client_id = live_cp.get("gdrive", "client_id", fallback=None)
+                        existing_client_secret = live_cp.get("gdrive", "client_secret", fallback=None)
+                except Exception:
+                    pass
+
+            eff_client_id = draft.client_id or existing_client_id
+            eff_client_secret = draft.client_secret or existing_client_secret
+
+            if eff_client_id:
+                cp.set("gdrive", "client_id", eff_client_id)
+            if eff_client_secret:
+                cp.set("gdrive", "client_secret", eff_client_secret)
+            if draft.team_drive:
+                cp.set("gdrive", "team_drive", draft.team_drive)
+
+            with open(tmp_conf_path, "w", encoding="utf-8") as f:
+                cp.write(f)
+            os.chmod(tmp_conf_path, 0o600)
+
+            cmd = [str(rclone_bin), "about", "gdrive:", f"--config={tmp_conf_path}"]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise ConfigurationValidationError("Google Drive draft validation timed out after 15s")
+            except FileNotFoundError:
+                raise ConfigurationValidationError(f"rclone binary not found at {rclone_bin}")
+
+            if proc.returncode != 0:
+                raw_err = proc.stderr or proc.stdout or f"exit code {proc.returncode}"
+                redacted = redact_secrets(
+                    raw_err, [draft.token, draft.client_secret, draft.client_id]
+                )
+                raise ConfigurationValidationError(
+                    f"Google Drive credentials validation failed: {redacted.strip()}"
+                )
+
+        return True
+
+    def promote_draft(self, draft: GoogleDriveSourceDraft) -> None:
+        """Atomically promote validated draft to managed rclone.conf with 0600 permissions.
+
+        Preserves any existing non-gdrive sections (e.g. ncwebdav).
+        """
+        self.conf_path.parent.mkdir(parents=True, exist_ok=True)
+        parser = configparser.RawConfigParser(interpolation=None)
+        parser.optionxform = str
+
+        if self.conf_path.exists():
+            try:
+                with open(self.conf_path, "r", encoding="utf-8") as f:
+                    parser.read_file(f)
+            except Exception as exc:
+                raise ConfigurationStoreError(f"Failed to read existing rclone.conf: {exc}") from exc
+
+        if not parser.has_section("gdrive"):
+            parser.add_section("gdrive")
+
+        parser.set("gdrive", "type", "drive")
+        parser.set("gdrive", "scope", draft.scope)
+        parser.set("gdrive", "token", draft.token)
+
+        eff_client_id = draft.client_id or (parser.get("gdrive", "client_id", fallback=None) if parser.has_option("gdrive", "client_id") else None)
+        eff_client_secret = draft.client_secret or (parser.get("gdrive", "client_secret", fallback=None) if parser.has_option("gdrive", "client_secret") else None)
+
+        if eff_client_id:
+            parser.set("gdrive", "client_id", eff_client_id)
+        elif parser.has_option("gdrive", "client_id"):
+            parser.remove_option("gdrive", "client_id")
+
+        if eff_client_secret:
+            parser.set("gdrive", "client_secret", eff_client_secret)
+        elif parser.has_option("gdrive", "client_secret"):
+            parser.remove_option("gdrive", "client_secret")
+
+        if draft.team_drive:
+            parser.set("gdrive", "team_drive", draft.team_drive)
+        elif parser.has_option("gdrive", "team_drive"):
+            parser.remove_option("gdrive", "team_drive")
+
+        orig_content = self.conf_path.read_bytes() if self.conf_path.exists() else None
+        tmp_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                dir=str(self.conf_path.parent),
+                delete=False,
+                encoding="utf-8",
+            ) as tf:
+                parser.write(tf)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = Path(tf.name)
+
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, self.conf_path)
+            os.chmod(self.conf_path, 0o600)
+        except Exception as exc:
+            if orig_content is not None:
+                try:
+                    self.conf_path.write_bytes(orig_content)
+                    os.chmod(self.conf_path, 0o600)
+                except Exception:
+                    pass
+            raise ConfigurationStoreError(f"Failed to atomically promote rclone.conf: {exc}") from exc
+        finally:
+            if tmp_path and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass

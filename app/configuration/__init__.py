@@ -14,6 +14,7 @@ from .lease import ConfigurationLease
 from .manager import Configuration
 from .models import (
     BootstrapSettings,
+    GoogleDriveSourceDraft,
     EffectiveConfiguration,
     EndpointMetadata,
     RclonePerformanceSettings,
@@ -34,6 +35,7 @@ __all__ = [
     "MissingSettingError",
     "StoreType",
     "BootstrapSettings",
+    "GoogleDriveSourceDraft",
     "ScheduleSettings",
     "RclonePerformanceSettings",
     "SyncPathsSettings",

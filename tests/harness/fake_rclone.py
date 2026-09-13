@@ -191,6 +191,15 @@ def run_fake_rclone_cli(
         )
         return 0
 
+    if scenario.exit_code != 0 and subcommand not in ("version", "copy"):
+        if scenario.stderr_override:
+            sys.stderr.write(scenario.stderr_override)
+        elif not scenario.stdout_override:
+            sys.stderr.write(f"Fake rclone error: exit code {scenario.exit_code}\n")
+        if scenario.stdout_override:
+            sys.stdout.write(scenario.stdout_override)
+        return scenario.exit_code
+
     if subcommand == "listremotes":
         if scenario.remotes_override is not None:
             for r in scenario.remotes_override:
