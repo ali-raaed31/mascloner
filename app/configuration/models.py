@@ -17,6 +17,35 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+def validate_drive_chunk_size(v: Optional[str]) -> Optional[str]:
+    """Validate that Google Drive chunk size is a power of 2 >= 256k."""
+    if v is None:
+        return None
+    stripped = v.strip()
+    if not stripped:
+        return None
+    m = re.match(r"^(\d+)(b|k|m|g|ki|mi|gi|kb|mb|gb)?$", stripped, re.IGNORECASE)
+    if not m:
+        raise ValueError(
+            f"Invalid drive chunk size {v!r}. Must be a power of 2 >= 256k (e.g. 16M, 32M, 64M, 128M)."
+        )
+    num = int(m.group(1))
+    unit = (m.group(2) or "").lower()
+    multiplier = 1
+    if unit in ("k", "ki", "kb"):
+        multiplier = 1024
+    elif unit in ("m", "mi", "mb"):
+        multiplier = 1024 * 1024
+    elif unit in ("g", "gi", "gb"):
+        multiplier = 1024 * 1024 * 1024
+    bytes_val = num * multiplier
+    if bytes_val < 256 * 1024 or (bytes_val & (bytes_val - 1)) != 0:
+        raise ValueError(
+            f"Invalid drive chunk size {v!r}. Google Drive requires chunk size to be a power of 2 >= 256k (e.g. 16M, 32M, 64M, 128M)."
+        )
+    return stripped
+
+
 class StoreType(str, Enum):
     """The authoritative storage tier for a configuration setting."""
 
@@ -94,7 +123,7 @@ class RclonePerformanceSettings(BaseModel):
     drive_upload_cutoff: Optional[str] = "128M"
     fast_list: bool = False
 
-    @field_validator("buffer_size", "drive_chunk_size", "drive_upload_cutoff")
+    @field_validator("buffer_size", "drive_upload_cutoff")
     @classmethod
     def _clean_size_strings(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -106,6 +135,11 @@ class RclonePerformanceSettings(BaseModel):
         if not size_regex.match(stripped):
             raise ValueError(f"Invalid size string {v!r}. Must be a valid byte/size specification (e.g. 32Mi, 64M, 128M).")
         return stripped
+
+    @field_validator("drive_chunk_size")
+    @classmethod
+    def _validate_drive_chunk_size(cls, v: Optional[str]) -> Optional[str]:
+        return validate_drive_chunk_size(v)
 
 
 class SyncPathsSettings(BaseModel):

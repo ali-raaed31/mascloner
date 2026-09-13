@@ -345,3 +345,36 @@ def test_migration_downgrade_and_retry(
     with Session() as session:
         rows_retry = {row.key: row for row in session.execute(select(ConfigKV)).scalars().all()}
         assert "transfers" in rows_retry
+
+
+def test_drive_chunk_size_power_of_two_validation(fresh_client: TestClient, isolated_fresh_install: InstallationRoot):
+    """Verify drive_chunk_size enforces power-of-two >= 256k and invalid values fall back to 64M."""
+    # Valid power-of-two sizes accepted
+    for valid in ["256k", "512k", "1M", "2M", "16M", "32M", "64M", "128M"]:
+        res = fresh_client.post(
+            "/rclone/config",
+            json={"transfers": 4, "checkers": 8, "tpslimit": 10, "tpslimit_burst": 1, "drive_chunk_size": valid},
+        )
+        assert res.status_code == 200, f"Expected 200 for {valid}, got {res.status_code}"
+
+    # Non-power-of-two (like 10Mi) or too small (<256k) rejected with 422
+    for invalid in ["10Mi", "10M", "3M", "100k", "128k"]:
+        res = fresh_client.post(
+            "/rclone/config",
+            json={"transfers": 4, "checkers": 8, "tpslimit": 10, "tpslimit_burst": 1, "drive_chunk_size": invalid},
+        )
+        assert res.status_code == 422, f"Expected 422 for {invalid}, got {res.status_code}"
+        assert "power of two" in str(res.json()).lower() or "256k" in str(res.json()).lower()
+
+    # If database contains corrupted value like 10Mi, load_performance falls back safely to 64M
+    cfg = Configuration(
+        base_dir=isolated_fresh_install.base_dir,
+        env_path=isolated_fresh_install.root_env_path,
+        rclone_conf_path=isolated_fresh_install.rclone_conf_path,
+    )
+    with cfg._session_factory() as session:
+        cfg._sqlite_adapter._set_kv("drive_chunk_size", "10Mi", session)
+        session.commit()
+
+    loaded = cfg.get_performance()
+    assert loaded.drive_chunk_size == "64M"

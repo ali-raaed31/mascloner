@@ -44,6 +44,7 @@ def redact_secrets(text: str, secrets: Iterable[Optional[str]]) -> str:
     return result
 from .exceptions import ConfigurationStoreError, ConfigurationValidationError
 from .models import (
+    validate_drive_chunk_size,
     BootstrapSettings,
     GoogleDriveSourceDraft,
     NextcloudDestinationDraft,
@@ -245,6 +246,10 @@ class SqliteStoreAdapter:
             tpslimit_burst_val = self._get_kv("tpslimit_burst", session) or self._get_kv("rclone_tpslimit_burst", session) or self._fallback("RCLONE_TPSLIMIT_BURST", "1", session=session)
             buffer_size_val = self._get_kv("buffer_size", session) or self._get_kv("rclone_buffer_size", session) or self._fallback("RCLONE_BUFFER_SIZE", "32Mi", session=session)
             chunk_size_val = self._get_kv("drive_chunk_size", session) or self._get_kv("rclone_drive_chunk_size", session) or self._fallback("RCLONE_DRIVE_CHUNK_SIZE", "64M", session=session)
+            try:
+                validate_drive_chunk_size(chunk_size_val)
+            except Exception:
+                chunk_size_val = "64M"
             cutoff_val = self._get_kv("drive_upload_cutoff", session) or self._get_kv("rclone_drive_upload_cutoff", session) or self._fallback("RCLONE_DRIVE_UPLOAD_CUTOFF", "128M", session=session)
             fast_list_val = self._get_kv("fast_list", session) or self._get_kv("rclone_fast_list", session) or self._fallback("RCLONE_FAST_LIST", "false", session=session)
 
@@ -398,7 +403,7 @@ class RcloneConfStoreAdapter:
                 cp.write(f)
             os.chmod(tmp_conf_path, 0o600)
 
-            cmd = [str(rclone_bin), "about", "gdrive:", f"--config={tmp_conf_path}"]
+            cmd = [str(rclone_bin), "about", "gdrive:", f"--config={tmp_conf_path}", "--drive-chunk-size=64M"]
             try:
                 proc = subprocess.run(
                     cmd,
