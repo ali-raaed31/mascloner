@@ -53,7 +53,7 @@ from ops.cli.utils import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "2.2.2"
+UPDATE_CMD_VERSION = "3.0.0"
 UPDATE_CMD_DATE = "2025-09-30"
 
 
