@@ -410,8 +410,16 @@ def start_scheduler(
             sync_scheduler.remove_sync_job()
             logger.info("Scheduler started with sync job disabled")
 
-        # Schedule daily history retention maintenance job (ADR 0008)
-        sync_scheduler.add_retention_job()
+        # Schedule daily history retention maintenance job only if enabled/cutover-validated (ADR 0008, Issue #14)
+        try:
+            with get_db_session() as session:
+                val = session.execute(
+                    select(ConfigKV.value).where(ConfigKV.key == "retention_enabled")
+                ).scalar_one_or_none()
+                if val == "true":
+                    sync_scheduler.add_retention_job()
+        except Exception:
+            pass
 
         return True
     except Exception as e:
