@@ -131,3 +131,67 @@ mascloner prune --days 60 --batch-size 100
   curl -X POST "http://127.0.0.1:8787/maintenance/retention?dry_run=true"
   curl -X POST "http://127.0.0.1:8787/maintenance/retention?dry_run=false"
   ```
+
+---
+
+## 6. Architecture Migration & Rollback (v3.0.0 Cutover Runbook)
+
+Per [ADR 0001](file:///home/alirun/projects/cloner/docs/adr/0001-explicit-configuration-ownership.md) and [ADR 0003](file:///home/alirun/projects/cloner/docs/adr/0003-managed-rclone-configuration.md), migrating from legacy versions to v3.0.0 enforces a backup-first, zero-guesswork cutover workflow.
+
+### Prerequisites
+1. **VM Topology**: Single control process on VM with local block storage.
+2. **Free Disk Space**: At least 100MB (or 2.5x current database size) free in `/var/backups/mascloner`.
+3. **Database Integrity**: Live SQLite database must pass `PRAGMA integrity_check`.
+
+### Downtime Expectation
+- **Maintenance Window**: 30–60 seconds total.
+- The service is quiesced, active executions reconciled, backup bundle verified, and new configurations promoted atomically before restarting the control process.
+
+### Step-by-Step Procedure
+
+1. **Preflight Health Inspection**:
+   ```bash
+   mascloner migrate --check
+   ```
+   Validates filesystem topology, storage free space, write permissions, database integrity, and verifies no active runs are holding uncommitted state.
+
+2. **Simulate Cutover (Dry-Run)**:
+   ```bash
+   mascloner migrate --dry-run
+   ```
+   Inventories legacy `.env`, SQLite `ConfigKV`, and `rclone.conf` remotes. Calculates proposed v3 mappings and proves zero persistent disk or database mutations.
+
+3. **Apply Cutover**:
+   ```bash
+   mascloner migrate --apply
+   ```
+   The apply procedure performs the following atomic sequence:
+   - Quiesces the service and reconciles any stale non-terminal runs.
+   - Creates a verified, timestamped recovery bundle in `/var/backups/mascloner/migration_recovery_bundle_<timestamp>/`.
+   - Migrates legacy run statuses (`success`, `error`, `stopped`, `partial`) to canonical statuses.
+   - Imports mutable schedule (`enabled=true`), sync folder paths, performance parameters, and retention settings into SQLite.
+   - Validates and establishes fixed `gdrive` and `ncwebdav` remotes in managed `rclone.conf`.
+   - Records cutover version (`3.0.0`) and enables daily history retention.
+
+4. **Post-Cutover Smoke Verification**:
+   ```bash
+   # Check service and database health
+   mascloner status
+   
+   # Verify schedule continuity
+   curl -s http://127.0.0.1:8787/schedule | jq .
+   
+   # Validate fixed remotes
+   curl -s http://127.0.0.1:8787/endpoints/status | jq .
+   ```
+
+### Emergency Rollback Procedure
+If any unexpected failure or behavioral regression occurs post-cutover:
+```bash
+mascloner migrate --rollback /var/backups/mascloner/migration_recovery_bundle_<timestamp>
+```
+The rollback procedure:
+- Stops active processes and disposes database locks.
+- Restores `mascloner.db`, removing any stray WAL/SHM files.
+- Restores original `.env` and `rclone.conf`.
+- Verifies restored SQLite database integrity before completing.

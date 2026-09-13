@@ -22,10 +22,12 @@ class OnlineBackupError(RuntimeError):
     """Raised when an online backup or verification fails."""
 
 
-def verify_database_integrity(db_path: Path) -> bool:
+def verify_database_integrity(db_path: Path | str) -> bool:
     """Run SQLite integrity and foreign key checks on a database file."""
-    if not db_path.exists():
+    path_obj = Path(db_path)
+    if not path_obj.exists():
         return False
+    db_path = path_obj
     try:
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
