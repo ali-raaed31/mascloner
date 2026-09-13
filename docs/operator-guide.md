@@ -182,7 +182,8 @@ Per [ADR 0001](file:///home/alirun/projects/cloner/docs/adr/0001-explicit-config
    curl -s http://127.0.0.1:8787/schedule | jq .
    
    # Validate fixed remotes
-   curl -s http://127.0.0.1:8787/endpoints/status | jq .
+   curl -s http://127.0.0.1:8787/oauth/google-drive/status | jq .
+   curl -s http://127.0.0.1:8787/test/nextcloud/status | jq .
    ```
 
 ### Emergency Rollback Procedure

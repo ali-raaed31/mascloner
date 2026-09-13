@@ -148,16 +148,20 @@ class APIClient:
         """Get recent file events."""
         return self._make_request("GET", f"/events?limit={limit}")
 
-    def test_gdrive(self, remote_name: str) -> Optional[Dict[str, Any]]:
+    def test_google_drive_connection(self) -> Optional[Dict[str, Any]]:
         """Test Google Drive connection."""
-        return self._make_request("POST", "/test/gdrive", json={"remote_name": remote_name})
+        return self._make_request("POST", "/oauth/google-drive/test")
 
-    def test_nextcloud(self, remote_name: str) -> Optional[Dict[str, Any]]:
+    def test_gdrive(self, remote_name: str = "gdrive") -> Optional[Dict[str, Any]]:
+        """Test Google Drive connection (backward-compatible alias)."""
+        return self.test_google_drive_connection()
+
+    def test_nextcloud(self, remote_name: str = "ncwebdav") -> Optional[Dict[str, Any]]:
         """Test Nextcloud connection."""
         return self._make_request("POST", "/test/nextcloud", json={"remote_name": remote_name})
 
     def test_nextcloud_webdav(
-        self, url: str, user: str, password: str, remote_name: str
+        self, url: str, user: str, password: str, remote_name: str = "ncwebdav"
     ) -> Optional[Dict[str, Any]]:
         """Test Nextcloud WebDAV connection and create remote."""
         return self._make_request(
@@ -189,11 +193,15 @@ class APIClient:
         """Get database information."""
         return self._make_request("GET", "/database/info")
 
-    def get_gdrive_oauth_config(self) -> Optional[Dict[str, Any]]:
+    def get_google_drive_oauth_config(self) -> Optional[Dict[str, Any]]:
         """Get Google Drive OAuth client configuration."""
         return self._make_request("GET", "/oauth/google-drive/oauth-config")
 
-    def save_gdrive_oauth_config(
+    def get_gdrive_oauth_config(self) -> Optional[Dict[str, Any]]:
+        """Get Google Drive OAuth client configuration (backward-compatible alias)."""
+        return self.get_google_drive_oauth_config()
+
+    def save_google_drive_oauth_config(
         self, client_id: str, client_secret: str
     ) -> Optional[Dict[str, Any]]:
         """Save Google Drive custom OAuth client credentials."""
@@ -203,7 +211,13 @@ class APIClient:
             json={"client_id": client_id, "client_secret": client_secret},
         )
 
-    def configure_gdrive_oauth(
+    def save_gdrive_oauth_config(
+        self, client_id: str, client_secret: str
+    ) -> Optional[Dict[str, Any]]:
+        """Save Google Drive custom OAuth client credentials (backward-compatible alias)."""
+        return self.save_google_drive_oauth_config(client_id, client_secret)
+
+    def configure_google_drive_oauth(
         self,
         token: str,
         scope: str = "drive.readonly",
@@ -218,16 +232,48 @@ class APIClient:
             data["client_secret"] = client_secret
         return self._make_request("POST", "/oauth/google-drive", json=data)
 
-    def get_gdrive_status(self) -> Optional[Dict[str, Any]]:
+    def configure_gdrive_oauth(
+        self,
+        token: str,
+        scope: str = "drive.readonly",
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Configure Google Drive with OAuth token (backward-compatible alias)."""
+        return self.configure_google_drive_oauth(
+            token=token, scope=scope, client_id=client_id, client_secret=client_secret
+        )
+
+    def get_google_drive_status(self) -> Optional[Dict[str, Any]]:
         """Get Google Drive configuration status."""
         return self._make_request("GET", "/oauth/google-drive/status")
 
-    def remove_gdrive_config(self) -> Optional[Dict[str, Any]]:
+    def get_gdrive_status(self) -> Optional[Dict[str, Any]]:
+        """Get Google Drive configuration status (backward-compatible alias)."""
+        return self.get_google_drive_status()
+
+    def remove_google_drive_config(self) -> Optional[Dict[str, Any]]:
         """Remove Google Drive configuration."""
         return self._make_request("DELETE", "/oauth/google-drive")
 
+    def remove_gdrive_config(self) -> Optional[Dict[str, Any]]:
+        """Remove Google Drive configuration (backward-compatible alias)."""
+        return self.remove_google_drive_config()
+
+    def get_nextcloud_status(self) -> Optional[Dict[str, Any]]:
+        """Get Nextcloud destination configuration status."""
+        return self._make_request("GET", "/test/nextcloud/status")
+
+    def remove_nextcloud_config(self) -> Optional[Dict[str, Any]]:
+        """Remove Nextcloud configuration."""
+        return self._make_request("DELETE", "/test/nextcloud")
+
     def remove_remote(self, remote_name: str) -> Optional[Dict[str, Any]]:
         """Remove an rclone remote."""
+        if remote_name == "gdrive":
+            return self.remove_google_drive_config()
+        elif remote_name == "ncwebdav":
+            return self.remove_nextcloud_config()
         return self._make_request("DELETE", f"/remotes/{remote_name}")
 
     def validate_config(self) -> Optional[Dict[str, Any]]:
