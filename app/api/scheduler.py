@@ -227,9 +227,34 @@ def reconcile_stale_runs(session_factory: Optional[Any] = None) -> int:
 def sync_job(wait: bool = True) -> Any:
     """Main scheduled sync job function executing through SyncExecutor."""
     from ..execution import SyncExecutor
+    from ..execution.models import TriggerResult
 
-    logger.info("Starting scheduled sync job through SyncExecutor")
+    if not _sync_lock.acquire(blocking=False):
+        logger.warning("Sync job already running (lock held), skipping this execution")
+        try:
+            with get_db_session() as skip_db:
+                now_utc = datetime.now(timezone.utc)
+                skipped_run = Run(
+                    status=SyncStatus.SKIPPED,
+                    started_at=now_utc,
+                    finished_at=now_utc,
+                    message="Sync run skipped: another synchronization run is currently active",
+                )
+                skip_db.add(skipped_run)
+                skip_db.commit()
+                skip_db.refresh(skipped_run)
+                return TriggerResult(
+                    accepted=False,
+                    run_id=skipped_run.id,
+                    status=SyncStatus.SKIPPED,
+                    message=skipped_run.message,
+                )
+        except Exception as exc:
+            logger.error("Failed to record skipped sync run: %s", exc)
+            return None
+
     try:
+        logger.info("Starting scheduled sync job through SyncExecutor")
         executor = SyncExecutor.get_instance()
         result = executor.trigger_scheduled_run(wait=wait)
         if not result.accepted:
@@ -249,6 +274,8 @@ def sync_job(wait: bool = True) -> Any:
     except Exception as exc:
         logger.error("Error executing scheduled sync job: %s", exc)
         return None
+    finally:
+        _sync_lock.release()
 
 
 def cleanup_old_runs(db: Session, keep_runs: int = 100) -> int:

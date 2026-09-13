@@ -393,8 +393,10 @@ class SyncExecutor:
                                 recent_events_buf.pop(0)
 
                         if stats:
-                            bytes_transferred = int(stats.get("bytes", bytes_transferred) or 0)
+                            bytes_transferred = int(stats.get("bytes", bytes_transferred) or bytes_transferred)
                             errors = int(stats.get("errors", errors) or errors)
+                            if "files" in stats:
+                                num_added = int(stats["files"])
                             transfers = int(stats.get("transfers", num_added + num_updated) or 0)
                             total_bytes = stats.get("totalBytes")
                             speed = stats.get("speed")
@@ -431,6 +433,11 @@ class SyncExecutor:
                         with open(log_file_path, "r", encoding="utf-8") as lf:
                             for lf_line in lf:
                                 f_evt, f_stats = RcloneOutputParser.parse_line(lf_line)
+                                if f_stats:
+                                    bytes_transferred = int(f_stats.get("bytes", bytes_transferred) or bytes_transferred)
+                                    errors = int(f_stats.get("errors", errors) or errors)
+                                    if "files" in f_stats:
+                                        num_added = int(f_stats["files"])
                                 if f_evt and not any(e.file_path == f_evt.file_path and e.action == f_evt.action for e in file_events):
                                     file_events.append(f_evt)
                                     if f_evt.action == "copy":

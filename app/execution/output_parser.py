@@ -28,6 +28,11 @@ class RcloneOutputParser:
         "Updated": "update",
     }
 
+    import re
+    STATS_PATTERN = re.compile(
+        r"Transferred:\s+(\d+)\s+/\s+(\d+),\s+(\d+)\s+files,\s+(\d+)\s+errors"
+    )
+
     @classmethod
     def parse_line(cls, line: str) -> Tuple[Optional[FileEventEntry], Optional[Dict[str, Any]]]:
         """Parse a single rclone JSON line.
@@ -51,6 +56,19 @@ class RcloneOutputParser:
         stats_data = obj.get("stats")
         if stats_data and isinstance(stats_data, dict):
             return None, stats_data
+
+        msg = obj.get("msg", "")
+        # Check for human-readable / notice stats fallback
+        m = cls.STATS_PATTERN.search(msg)
+        if m:
+            extracted_stats = {
+                "bytes": int(m.group(1)),
+                "totalBytes": int(m.group(2)),
+                "files": int(m.group(3)),
+                "transfers": int(m.group(3)),
+                "errors": int(m.group(4)),
+            }
+            return None, extracted_stats
 
         # Check for file operation event
         msg = obj.get("msg", "")
