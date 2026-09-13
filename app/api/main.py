@@ -1,11 +1,10 @@
-"""FastAPI application entrypoint for MasCloner API."""
+"""FastAPI main application module."""
 
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import List
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,8 +20,7 @@ from .routers import maintenance as maintenance_router
 from .routers import nextcloud as nextcloud_router
 from .routers import runs as runs_router
 from .routers import schedule as schedule_router
-from .routers import tree as tree_router
-from .scheduler import start_scheduler, stop_scheduler
+from .scheduler import start_scheduler, stop_scheduler, reconcile_stale_runs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,8 +41,16 @@ async def lifespan(app: FastAPI):
         )
 
     try:
+        from ..execution import SyncExecutor
+        from ..retention import RetentionService
+        SyncExecutor.reset_instance()
+        RetentionService.reset_instance()
         init_db()
         logger.info("Database initialized")
+
+        reconciled = reconcile_stale_runs()
+        if reconciled > 0:
+            logger.info("Reconciled %d stale run(s) on startup", reconciled)
 
         if start_scheduler():
             logger.info("Scheduler started")
@@ -58,50 +64,63 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down MasCloner API...")
     try:
-        stop_scheduler()
-        logger.info("Scheduler stopped")
-    except Exception as exc:  # pragma: no cover
+        if stop_scheduler():
+            logger.info("Scheduler stopped")
+        else:
+            logger.warning("Failed to stop scheduler cleanly")
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Shutdown error: %s", exc)
 
-
-# Build CORS origins from environment or use defaults
-def get_cors_origins() -> list[str]:
-    """Get CORS allowed origins from environment or defaults."""
-    origins_env = os.getenv("MASCLONER_CORS_ORIGINS")
-    if origins_env:
-        return [origin.strip() for origin in origins_env.split(",") if origin.strip()]
-    return ["http://localhost:8501", "http://127.0.0.1:8501"]
+    try:
+        from ..execution import SyncExecutor
+        executor = SyncExecutor.get_instance()
+        executor.shutdown(timeout=10.0)
+        SyncExecutor.reset_instance()
+        from ..retention import RetentionService
+        RetentionService.reset_instance()
+        logger.info("SyncExecutor shutdown completed")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("SyncExecutor shutdown error: %s", exc)
 
 
 app = FastAPI(
     title="MasCloner API",
-    description="API for managing Google Drive to Nextcloud sync operations",
-    version="1.0.0",
+    description="REST API for MasCloner Google Drive to Nextcloud sync service",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
+# Register custom exception handlers for standard error responses
+register_exception_handlers(app)
+
+# Configure CORS for local frontend access
+allowed_origins = [
+    "http://localhost:8501",  # Streamlit default
+    "http://127.0.0.1:8501",
+]
+
+# Allow dynamic configuration of CORS origins
+if config:
+    ui_config = config.get_ui_config()
+    ui_host = ui_config["host"]
+    ui_port = ui_config["port"]
+
+    if ui_host not in ["localhost", "127.0.0.1"]:
+        allowed_origins.extend([
+            f"http://{ui_host}:{ui_port}",
+            f"https://{ui_host}:{ui_port}",
+        ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register custom exception handlers for consistent error responses
-register_exception_handlers(app)
-
-
-# Include routers with authentication dependency when enabled
-# Health endpoint is always public
-@app.get("/health")
-async def health_check():
-    """Public health check endpoint (no auth required)."""
-    return {"status": "healthy", "service": "mascloner-api"}
-
-
-# Apply auth dependency to all routers when auth is enabled
-router_dependencies = []
+# Include routers with authentication if enabled
+router_dependencies: List[Depends] = []
 if is_auth_enabled():
     router_dependencies.append(Depends(require_auth))
 
@@ -109,7 +128,6 @@ app.include_router(config_router.router, dependencies=router_dependencies)
 app.include_router(runs_router.router, dependencies=router_dependencies)
 app.include_router(runs_router.events_router, dependencies=router_dependencies)
 app.include_router(schedule_router.router, dependencies=router_dependencies)
-app.include_router(tree_router.router, dependencies=router_dependencies)
 app.include_router(browse_router.router, dependencies=router_dependencies)
 app.include_router(google_drive_router.router, dependencies=router_dependencies)
 app.include_router(nextcloud_router.router, dependencies=router_dependencies)
@@ -124,13 +142,12 @@ if __name__ == "__main__":  # pragma: no cover
         host = api_config["host"]
         port = api_config["port"]
     else:
-        host = "127.0.0.1"
-        port = 8787
+        host = "0.0.0.0"
+        port = 8000
 
     uvicorn.run(
-        "app.api.main:app",
+        app,
         host=host,
         port=port,
-        reload=False,
         log_level="info",
     )

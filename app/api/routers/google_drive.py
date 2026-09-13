@@ -13,15 +13,16 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, status
 
-try:
-    from dotenv import load_dotenv
-except Exception:  # optional dependency in some test envs
-
-    def load_dotenv(*args, **kwargs):  # type: ignore
-        return False
-
-
 from ..config import config
+from ...inspection import EndpointInspector
+from ...configuration import (
+    Configuration,
+    ConfigurationLeaseError,
+    ConfigurationStoreError,
+    ConfigurationValidationError,
+    GoogleDriveSourceDraft,
+)
+from ..db import get_db_session
 from ..schemas import (
     ApiResponse,
     GoogleDriveOAuthConfigRequest,
@@ -36,148 +37,55 @@ router = APIRouter(prefix="/oauth/google-drive", tags=["google-drive"])
 RCLONE_REMOTE_NAME = "gdrive"
 
 
-def _load_rclone_config(config_path: Path) -> configparser.ConfigParser:
-    """Load the rclone config file, returning an empty parser if missing."""
-
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.optionxform = str  # Preserve key casing for rclone
-
-    if config_path.exists():
-        try:
-            with config_path.open("r", encoding="utf-8") as handle:
-                parser.read_file(handle)
-        except configparser.Error as exc:  # pragma: no cover - defensive
-            raise RuntimeError(f"Invalid rclone config at {config_path}: {exc}") from exc
-
-    return parser
-
-
-def _write_rclone_config(config_path: Path, parser: configparser.ConfigParser) -> None:
-    """Persist the rclone config atomically with safe permissions."""
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Optional[Path] = None
-
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=str(config_path.parent),
-            encoding="utf-8",
-        ) as tmp_file:
-            parser.write(tmp_file)
-            tmp_path = Path(tmp_file.name)
-
-        os.replace(tmp_path, config_path)
-        os.chmod(config_path, 0o600)
-    finally:
-        if tmp_path and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except Exception:  # pragma: no cover - cleanup best effort
-                pass
-
-
-def _update_rclone_remote(config_path: Path, updates: Dict[str, Optional[str]]) -> None:
-    """Apply updates to the gdrive remote configuration."""
-
-    try:
-        parser = _load_rclone_config(config_path)
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
-
-    if not parser.has_section(RCLONE_REMOTE_NAME):
-        parser.add_section(RCLONE_REMOTE_NAME)
-
-    for key, value in updates.items():
-        if value is None:
-            if parser.has_option(RCLONE_REMOTE_NAME, key):
-                parser.remove_option(RCLONE_REMOTE_NAME, key)
-        else:
-            parser.set(RCLONE_REMOTE_NAME, key, value)
-
-    try:
-        _write_rclone_config(config_path, parser)
-    except Exception as exc:  # pragma: no cover - file system errors
-        logger.error("Failed to write rclone config: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to write rclone config: {exc}",
-        ) from exc
-
-
 @router.post("", response_model=ApiResponse)
 async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
-    """Configure Google Drive using OAuth token from rclone authorize."""
+    """Configure Google Drive using OAuth token from rclone authorize via safe Configuration flow."""
     try:
+        cfg = Configuration(session_factory=get_db_session)
+        oauth_creds = cfg.get_google_drive_oauth_credentials()
+        client_id = request.client_id or oauth_creds.get("client_id")
+        client_secret = request.client_secret
+
         try:
-            token_data = json.loads(request.token)
-            if "access_token" not in token_data:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid token format: missing access_token",
-                )
-        except json.JSONDecodeError:
+            draft = GoogleDriveSourceDraft(
+                token=request.token,
+                scope=request.scope,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            cfg.promote_google_drive_source(draft)
+        except ConfigurationLeaseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot configure Google Drive while another operation holds the lease: {exc}",
+            ) from exc
+        except (ConfigurationValidationError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid token format: not valid JSON",
-            )
+                detail=f"Invalid Google Drive configuration: {exc}",
+            ) from exc
+        except ConfigurationStoreError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save Google Drive configuration: {exc}",
+            ) from exc
 
-        base_config = config.get_base_config()
-        rclone_config_path = base_config["base_dir"] / base_config["rclone_conf"]
-
-        normalized_token = json.dumps(token_data, separators=(",", ":"))
-
-        # Get custom OAuth credentials from environment (prioritized over request)
-        oauth_config = config.get_gdrive_oauth_config()
-        client_id = oauth_config.get("client_id") or request.client_id
-        client_secret = oauth_config.get("client_secret") or request.client_secret
-
-        updates: Dict[str, Optional[str]] = {
-            "type": "drive",
-            "scope": request.scope,
-            "token": normalized_token,
-        }
-
-        if client_id:
-            updates["client_id"] = client_id
-        else:
-            updates["client_id"] = None
-
-        if client_secret:
-            updates["client_secret"] = client_secret
-        else:
-            updates["client_secret"] = None
-
-        _update_rclone_remote(rclone_config_path, updates)
-
-        if client_id and client_secret:
-            logger.info("Using custom OAuth credentials for Google Drive configuration")
-
-        logger.info("Google Drive configuration updated via OAuth token.")
-
-        # Warn if token lacks refresh_token (might stop working soon)
         warnings = []
-        if "refresh_token" not in token_data:
-            warn_msg = (
-                "Token has no refresh_token; access may expire soon. "
-                "Consider re-authorizing via rclone config with offline access or publish your OAuth app."
-            )
-            logger.warning(warn_msg)
-            warnings.append(warn_msg)
+        try:
+            parsed_tok = json.loads(request.token)
+            if "refresh_token" not in parsed_tok:
+                warnings.append("Token has no refresh_token; access may expire soon.")
+        except Exception:
+            pass
 
         return ApiResponse(
             success=True,
             message="Google Drive configured successfully",
             data={"warnings": warnings} if warnings else None,
         )
-
     except HTTPException:
         raise
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except Exception as exc:
         logger.error("Google Drive OAuth configuration error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -187,14 +95,10 @@ async def configure_google_drive_oauth(request: GoogleDriveOAuthRequest):
 
 @router.get("/oauth-config")
 async def get_google_drive_oauth_config():
-    """Get Google Drive OAuth configuration status."""
+    """Get Google Drive OAuth configuration status without exposing secrets."""
     try:
-        oauth_config = config.get_gdrive_oauth_config()
-        return {
-            "client_id": oauth_config.get("client_id"),
-            "client_secret": "***" if oauth_config.get("client_secret") else None,
-            "has_custom_oauth": bool(oauth_config.get("client_id") and oauth_config.get("client_secret"))
-        }
+        cfg = Configuration(session_factory=get_db_session)
+        return cfg.get_google_drive_oauth_credentials()
     except Exception as exc:
         logger.error("Failed to get OAuth config: %s", exc)
         return {"client_id": None, "client_secret": None, "has_custom_oauth": False}
@@ -207,284 +111,131 @@ async def test_oauth_config_endpoint(request: GoogleDriveOAuthConfigRequest):
         "success": True,
         "message": "OAuth config endpoint is working",
         "received_client_id": request.client_id[:10] + "...",
-        "received_client_secret": "*" * len(request.client_secret)
+        "received_client_secret": "*" * len(request.client_secret),
     }
 
 
 @router.post("/oauth-config")
 async def save_google_drive_oauth_config(request: GoogleDriveOAuthConfigRequest):
-    """Save Google Drive OAuth configuration."""
+    """Save Google Drive OAuth configuration directly to managed rclone configuration."""
+    client_id = request.client_id.strip()
+    client_secret = request.client_secret.strip()
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both client_id and client_secret are required",
+        )
+
     try:
-        client_id = request.client_id.strip()
-        client_secret = request.client_secret.strip()
-        
-        logger.info(f"Received OAuth config request: client_id={client_id[:10]}..., client_secret={'*' * len(client_secret)}")
-        
-        if not client_id or not client_secret:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Both client_id and client_secret are required"
-            )
-        
-        # Encrypt the credentials
-        encrypted_client_id = config.obscure_password(client_id)
-        encrypted_client_secret = config.obscure_password(client_secret)
-        
-        # Update environment variables in .env file
-        base_config = config.get_base_config()
-        env_file_path = base_config["base_dir"] / ".env"
-        
-        logger.info(f"Updating .env file at: {env_file_path}")
-        
-        # Read current .env file
-        env_content = ""
-        if env_file_path.exists():
-            try:
-                with open(env_file_path, 'r') as f:
-                    env_content = f.read()
-            except Exception as e:
-                logger.error(f"Failed to read .env file: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to read .env file: {e}"
-                )
-        
-        # Update or add OAuth variables
-        lines = env_content.split('\n')
-        updated_lines = []
-        oauth_vars_added = {"client_id": False, "client_secret": False}
-        
-        for line in lines:
-            if line.startswith("GDRIVE_OAUTH_CLIENT_ID="):
-                updated_lines.append(f'GDRIVE_OAUTH_CLIENT_ID="{encrypted_client_id}"')
-                oauth_vars_added["client_id"] = True
-            elif line.startswith("GDRIVE_OAUTH_CLIENT_SECRET="):
-                updated_lines.append(f'GDRIVE_OAUTH_CLIENT_SECRET="{encrypted_client_secret}"')
-                oauth_vars_added["client_secret"] = True
-            else:
-                updated_lines.append(line)
-        
-        # Add missing variables
-        if not oauth_vars_added["client_id"]:
-            updated_lines.append(f'GDRIVE_OAUTH_CLIENT_ID="{encrypted_client_id}"')
-        if not oauth_vars_added["client_secret"]:
-            updated_lines.append(f'GDRIVE_OAUTH_CLIENT_SECRET="{encrypted_client_secret}"')
-        
-        # Write updated .env file
-        try:
-            with open(env_file_path, 'w') as f:
-                f.write('\n'.join(updated_lines))
-            
-            # Set proper permissions
-            import os
-            os.chmod(env_file_path, 0o600)
-            logger.info("Successfully updated .env file with OAuth credentials")
-            # Hot-reload .env so the running process sees the new values
-            try:
-                load_dotenv(str(env_file_path), override=True)
-                logger.info("Reloaded .env into process environment")
-            except Exception as le:
-                logger.warning("Failed to reload .env: %s", le)
-        except Exception as e:
-            logger.error(f"Failed to write .env file: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to write .env file: {e}"
-            )
-        
-        logger.info("Google Drive OAuth credentials saved successfully")
+        cfg = Configuration(session_factory=get_db_session)
+        cfg.save_google_drive_oauth_credentials(client_id, client_secret)
         return {"success": True, "message": "OAuth credentials saved successfully"}
-        
-    except HTTPException:
-        raise
+    except ConfigurationLeaseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot save OAuth credentials while another operation holds the lease: {exc}",
+        ) from exc
+    except ConfigurationValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.error("Failed to save OAuth config: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save OAuth credentials: {exc}"
+            detail=f"Failed to save OAuth credentials: {exc}",
         )
 
 
 @router.get("/status", response_model=GoogleDriveStatusResponse)
 async def get_google_drive_status():
-    """Get Google Drive configuration status."""
+    """Get Google Drive configuration status via EndpointInspector."""
     try:
-        base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
-
-        # Check if gdrive remote is configured
-        process = await asyncio.create_subprocess_exec(
-            "rclone",
-            "--config",
-            rclone_config,
-            "listremotes",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        inspector = EndpointInspector()
+        status_res = await inspector.get_source_status(include_preview_folders=True)
+        return GoogleDriveStatusResponse(
+            configured=status_res.configured,
+            remote_name=status_res.remote_name,
+            scope=status_res.scope,
+            folders=status_res.folders,
         )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            return GoogleDriveStatusResponse(configured=False)
-
-        configured = process.returncode == 0 and "gdrive:" in stdout.decode()
-        response_data = {"configured": configured, "remote_name": "gdrive"}
-
-        if configured:
-            try:
-                # Read actual scope from rclone config dump if available
-                try:
-                    dump_process = await asyncio.create_subprocess_exec(
-                        "rclone",
-                        "--config",
-                        rclone_config,
-                        "config",
-                        "dump",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    try:
-                        dump_stdout, _ = await asyncio.wait_for(
-                            dump_process.communicate(), timeout=10
-                        )
-                        if dump_process.returncode == 0:
-                            cfg = json.loads(dump_stdout.decode())
-                            gdrive_cfg = cfg.get("gdrive") or cfg.get("gdrive:")
-                            if isinstance(gdrive_cfg, dict):
-                                response_data["scope"] = gdrive_cfg.get("scope")
-                    except asyncio.TimeoutError:
-                        dump_process.kill()
-                        await dump_process.wait()
-                except Exception as dump_exc:
-                    logger.debug("Failed to read scope from config dump: %s", dump_exc)
-
-                # List folders
-                folder_process = await asyncio.create_subprocess_exec(
-                    "rclone",
-                    "--config",
-                    rclone_config,
-                    "--transfers=2",
-                    "--checkers=2",
-                    "lsd",
-                    "gdrive:",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-                try:
-                    folder_stdout, _ = await asyncio.wait_for(
-                        folder_process.communicate(), timeout=15
-                    )
-                    if folder_process.returncode == 0:
-                        folders = []
-                        for line in folder_stdout.decode().strip().split("\n"):
-                            if line.strip():
-                                parts = line.strip().split()
-                                if len(parts) >= 5:
-                                    folder_name = " ".join(parts[4:])
-                                    folders.append(folder_name)
-                        response_data["folders"] = folders[:10]
-                except asyncio.TimeoutError:
-                    folder_process.kill()
-                    await folder_process.wait()
-                    logger.warning("Google Drive folder listing timeout")
-            except Exception as inner_exc:
-                logger.warning("Error getting folder list: %s", inner_exc)
-
-        return GoogleDriveStatusResponse(**response_data)
-
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except Exception as exc:
         logger.error("Google Drive status check error: %s", exc)
         return GoogleDriveStatusResponse(configured=False)
 
 
 @router.post("/test", response_model=ApiResponse)
 async def test_google_drive_connection():
-    """Test Google Drive connection."""
+    """Test Google Drive connection via EndpointInspector."""
     try:
-        base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
-
-        # Build rclone command with consistent settings
-        cmd = [
-            "rclone",
-            "--config",
-            rclone_config,
-            "--transfers=4",
-            "--checkers=8",
-            "lsd",
-            "gdrive:",
-        ]
-
-        # Add --fast-list if enabled
-        rclone_config_obj = config.get_rclone_config()
-        if rclone_config_obj.get("fast_list"):
-            cmd.append("--fast-list")
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            return ApiResponse(success=False, message="Connection test timeout")
-
-        if process.returncode == 0:
-            folders = []
-            for line in stdout.decode().strip().split("\n"):
-                if line.strip():
-                    parts = line.strip().split()
-                    if len(parts) >= 5:
-                        folder_name = " ".join(parts[4:])
-                        folders.append(folder_name)
-
+        inspector = EndpointInspector()
+        test_res = await inspector.test_connection("gdrive")
+        if test_res.success:
+            browse_res = await inspector.browse_folders("gdrive", path="", limit=10)
             return ApiResponse(
                 success=True,
                 message="Google Drive connection successful",
-                data={"folders": folders[:10]},
+                data={"folders": browse_res.folders if browse_res.success else []},
             )
-
         return ApiResponse(
             success=False,
-            message=f"Connection failed: {stderr.decode() or 'Unknown error'}",
+            message=test_res.message,
         )
-
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         logger.error("Google Drive connection test error: %s", exc)
         return ApiResponse(success=False, message=f"Test error: {exc}")
 
 
 @router.delete("", response_model=ApiResponse)
 async def remove_google_drive_config():
-    """Remove Google Drive configuration."""
+    """Remove Google Drive configuration safely under lease."""
     try:
-        base_config = config.get_base_config()
-        rclone_config_path = base_config["base_dir"] / base_config["rclone_conf"]
+        cfg = Configuration(session_factory=get_db_session)
+        with cfg.acquire_lease(holder="RemoveGoogleDriveConfig", timeout=2.0):
+            rclone_path = cfg._rclone_adapter.conf_path
+            if not rclone_path.exists():
+                return ApiResponse(success=True, message="Google Drive configuration removed successfully")
 
-        if not rclone_config_path.exists():
-            return ApiResponse(success=True, message="Google Drive configuration removed successfully")
+            parser = configparser.RawConfigParser(interpolation=None)
+            parser.optionxform = str
+            parser.read(rclone_path, encoding="utf-8")
 
-        try:
-            parser = _load_rclone_config(rclone_config_path)
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(exc),
-            ) from exc
+            if parser.has_section("gdrive"):
+                parser.remove_section("gdrive")
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        "w",
+                        dir=str(rclone_path.parent),
+                        delete=False,
+                        encoding="utf-8",
+                    ) as tf:
+                        parser.write(tf)
+                        tf.flush()
+                        os.fsync(tf.fileno())
+                        tmp_path = Path(tf.name)
+                    os.chmod(tmp_path, 0o600)
+                    os.replace(tmp_path, rclone_path)
+                    os.chmod(rclone_path, 0o600)
+                finally:
+                    if tmp_path and tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except Exception:
+                            pass
+                return ApiResponse(success=True, message="Google Drive configuration removed successfully")
 
-        if parser.remove_section(RCLONE_REMOTE_NAME):
-            _write_rclone_config(rclone_config_path, parser)
-            return ApiResponse(success=True, message="Google Drive configuration removed successfully")
-
-        return ApiResponse(success=True, message="Google Drive configuration not found")
-
-    except Exception as exc:  # pragma: no cover
-        logger.error("Google Drive config removal error: %s", exc)
-        return ApiResponse(success=False, message=f"Removal error: {exc}")
+            return ApiResponse(success=True, message="Google Drive configuration not found")
+    except ConfigurationLeaseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot remove configuration while another operation holds the lease: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Failed to remove Google Drive configuration: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove Google Drive configuration: {exc}",
+        )

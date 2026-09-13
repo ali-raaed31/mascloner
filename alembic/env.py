@@ -31,7 +31,10 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    """Get database URL from environment or default."""
+    """Get database URL from config, environment, or default."""
+    url = config.get_main_option("sqlalchemy.url")
+    if url:
+        return url
     db_path = os.environ.get("MASCLONER_DB_PATH", "data/mascloner.db")
     return f"sqlite:///{db_path}"
 

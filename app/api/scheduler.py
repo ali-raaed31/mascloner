@@ -11,15 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import config, get_log_dir
 from .db import get_db_session
-from .models import Run, FileEvent, ConfigKV
-from .rclone_runner import get_runner, SyncResult
-
+from .models import Run, FileEvent, ConfigKV, SyncStatus
 logger = logging.getLogger(__name__)
 
 # Global scheduler instance
@@ -30,10 +27,9 @@ _sync_lock = threading.Lock()
 class SyncScheduler:
     """Manages sync job scheduling and execution."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.scheduler = scheduler
-        self.runner = get_runner()
-    
+
     def start(self) -> None:
         """Start the scheduler."""
         if not self.scheduler.running:
@@ -82,12 +78,61 @@ class SyncScheduler:
     def remove_sync_job(self, job_id: str = "sync") -> bool:
         """Remove the sync job."""
         try:
-            self.scheduler.remove_job(job_id)
-            logger.info("Sync job removed")
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+                logger.info("Sync job removed")
             return True
         except Exception as e:
             logger.error(f"Failed to remove sync job: {e}")
             return False
+
+    def add_retention_job(
+        self,
+        hour: int = 3,
+        minute: int = 0,
+        job_id: str = "retention",
+    ) -> bool:
+        """Add or update daily history retention maintenance job (ADR 0008)."""
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            trigger = CronTrigger(hour=hour, minute=minute, timezone="UTC")
+            self.scheduler.add_job(
+                func=retention_job,
+                trigger=trigger,
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                name="Daily History Retention Maintenance",
+            )
+            logger.info("Scheduled daily retention maintenance job at %02d:%02d UTC", hour, minute)
+            return True
+        except Exception as e:
+            logger.error("Failed to add retention job: %s", e)
+            return False
+
+    def remove_retention_job(self, job_id: str = "retention") -> bool:
+        """Remove the retention maintenance job."""
+        try:
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+                logger.info("Retention job removed")
+            return True
+        except Exception as e:
+            logger.error("Failed to remove retention job: %s", e)
+            return False
+
+    def is_running(self) -> bool:
+        """Check if the background scheduler engine is running."""
+        return bool(self.scheduler.running)
+
+    def is_enabled(self, job_id: str = "sync") -> bool:
+        """Check if scheduler is running and the sync job is scheduled."""
+        return bool(self.scheduler.running and self.scheduler.get_job(job_id) is not None)
+
+    def has_sync_job(self, job_id: str = "sync") -> bool:
+        """Check if sync job is registered in scheduler."""
+        return bool(self.scheduler.get_job(job_id) is not None)
     
     def get_job_info(self, job_id: str = "sync") -> Optional[Dict[str, Any]]:
         """Get information about the sync job."""
@@ -108,13 +153,12 @@ class SyncScheduler:
             return None
     
     def trigger_sync_now(self) -> bool:
-        """Trigger an immediate sync run."""
+        """Trigger an immediate sync run using SyncExecutor."""
         try:
-            # Run sync job in a separate thread to avoid blocking
-            sync_thread = threading.Thread(target=sync_job, daemon=True)
-            sync_thread.start()
-            logger.info("Manual sync triggered")
-            return True
+            from ..execution import SyncExecutor
+            res = SyncExecutor.get_instance().trigger_manual_run()
+            logger.info("Manual sync triggered via SyncExecutor: accepted=%s", res.accepted)
+            return res.accepted
         except Exception as e:
             logger.error("Failed to trigger manual sync: %s", e)
             return False
@@ -169,124 +213,113 @@ def validate_sync_config(sync_config: Dict[str, str]) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
-def sync_job() -> None:
-    """Main sync job function."""
-    # Acquire lock to prevent concurrent runs
-    if not _sync_lock.acquire(blocking=False):
-        logger.warning("Sync job already running, skipping this execution")
-        return
-    
-    db: Optional[Session] = None
-    run: Optional[Run] = None
-    
-    try:
-        logger.info("Starting sync job")
-        
-        # Get database session
-        db = get_db_session()
-        
-        # Get sync configuration
-        sync_config = get_sync_config_from_db(db)
-        
-        # Validate configuration
-        config_valid, config_errors = validate_sync_config(sync_config)
-        if not config_valid:
-            logger.error(f"Invalid sync configuration: {config_errors}")
-            return
-        
-        # Create run record
-        log_dir = get_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_filename = f"sync-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log"
-        log_path = log_dir / log_filename
-        
-        run = Run(
-            status="running",
-            log_path=str(log_path)
-        )
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-        
-        logger.info(f"Created sync run {run.id}")
-        
-        # Execute sync
-        runner = get_runner()
-        
-        # Set current run info for live monitoring
-        runner.set_current_run(run.id, str(log_path))
-        
-        try:
-            result = runner.run_sync(
-                gdrive_remote=sync_config["gdrive_remote"],
-                gdrive_src=sync_config["gdrive_src"],
-                nc_remote=sync_config["nc_remote"],
-                nc_dest_path=sync_config["nc_dest_path"],
-                dry_run=False
+def reconcile_stale_runs(session_factory: Optional[Any] = None) -> int:
+    """Startup recovery: reconcile stale non-terminal runs to failed."""
+    get_session = session_factory or get_db_session
+    recovered_count = 0
+    with get_session() as db:
+        stale_runs = db.execute(
+            select(Run).where(Run.status.in_([SyncStatus.PENDING, SyncStatus.RUNNING]))
+        ).scalars().all()
+
+        now_utc = datetime.now(timezone.utc)
+        for run in stale_runs:
+            run.transition_to(
+                SyncStatus.FAILED,
+                message="Interrupted: previous process terminated while run was active (startup recovery)",
             )
-        finally:
-            # Clear current run info when done
-            runner.clear_current_run()
-        
-        # Update run with results
-        run.status = result.status
-        run.num_added = result.num_added
-        run.num_updated = result.num_updated
-        run.bytes_transferred = result.bytes_transferred
-        run.errors = result.errors
-        run.finished_at = datetime.now(timezone.utc)
-        
-        # Add file events unless lightweight mode is enabled
-        lightweight_events = os.getenv("MASCLONER_LIGHTWEIGHT_EVENTS", "0").lower() in ("1", "true", "yes", "on")
-        if not lightweight_events:
-            for event in result.events:
-                file_event = FileEvent(
-                    run_id=run.id,
-                    timestamp=event.timestamp,
-                    action=event.action,
-                    file_path=event.file_path,
-                    file_size=event.file_size,
-                    file_hash=event.file_hash,
-                    message=event.message
+            run.finished_at = now_utc
+            run.errors = (run.errors or 0) + 1
+            recovered_count += 1
+
+            recovery_event = FileEvent(
+                run_id=run.id,
+                timestamp=now_utc,
+                action="error",
+                file_path="",
+                file_size=0,
+                message="Run recovered on startup: marked failed due to process termination",
+            )
+            db.add(recovery_event)
+
+        if recovered_count > 0:
+            db.commit()
+            logger.warning("Startup recovery: marked %d stale run(s) as failed", recovered_count)
+
+    return recovered_count
+
+
+def sync_job(wait: bool = True) -> Any:
+    """Main scheduled sync job function executing through SyncExecutor."""
+    from ..execution import SyncExecutor
+    from ..execution.models import TriggerResult
+
+    if not _sync_lock.acquire(blocking=False):
+        logger.warning("Sync job already running (lock held), skipping this execution")
+        try:
+            with get_db_session() as skip_db:
+                now_utc = datetime.now(timezone.utc)
+                skipped_run = Run(
+                    status=SyncStatus.SKIPPED,
+                    started_at=now_utc,
+                    finished_at=now_utc,
+                    message="Sync run skipped: another synchronization run is currently active",
                 )
-                db.add(file_event)
-        
-        db.commit()
-        
-        logger.info(f"Sync job completed: {result.status}")
-        logger.info(f"Files: {result.num_added} added, {result.num_updated} updated")
-        logger.info(f"Bytes transferred: {result.bytes_transferred}")
-        logger.info(f"Errors: {result.errors}")
-        
-    except Exception as e:
-        logger.error(f"Sync job failed: {e}")
-        
-        # Update run status if we have a run record
-        if run and db:
-            try:
-                run.status = "error"
-                run.finished_at = datetime.now(timezone.utc)
-                
-                # Add error event
-                error_event = FileEvent(
-                    run_id=run.id,
-                    timestamp=datetime.now(timezone.utc),
-                    action="error",
-                    file_path="",
-                    file_size=0,
-                    message=f"Sync job error: {str(e)}"
+                skip_db.add(skipped_run)
+                skip_db.commit()
+                skip_db.refresh(skipped_run)
+                return TriggerResult(
+                    accepted=False,
+                    run_id=skipped_run.id,
+                    status=SyncStatus.SKIPPED,
+                    message=skipped_run.message,
                 )
-                db.add(error_event)
-                db.commit()
-            except Exception as commit_error:
-                logger.error(f"Failed to update run status: {commit_error}")
-    
+        except Exception as exc:
+            logger.error("Failed to record skipped sync run: %s", exc)
+            return None
+
+    try:
+        logger.info("Starting scheduled sync job through SyncExecutor")
+        executor = SyncExecutor.get_instance()
+        result = executor.trigger_scheduled_run(wait=wait)
+        if not result.accepted:
+            logger.warning(
+                "Scheduled sync run skipped or rejected (run %s): %s",
+                result.run_id,
+                result.message,
+            )
+        else:
+            logger.info(
+                "Scheduled sync run %s status: %s (%s)",
+                result.run_id,
+                result.status,
+                result.message,
+            )
+        return result
+    except Exception as exc:
+        logger.error("Error executing scheduled sync job: %s", exc)
+        return None
     finally:
-        # Clean up
-        if db:
-            db.close()
         _sync_lock.release()
-        logger.info("Sync job finished")
+
+
+def retention_job() -> Optional[Any]:
+    """Daily maintenance job executing history retention policy."""
+    from ..retention import RetentionService
+    try:
+        logger.info("Starting daily retention maintenance job")
+        service = RetentionService.get_instance()
+        report = service.apply_retention()
+        logger.info(
+            "Daily retention completed: %d runs deleted, %d events deleted, %d logs deleted",
+            report.runs_deleted,
+            report.events_deleted,
+            report.logs_deleted,
+        )
+        return report
+    except Exception as exc:
+        logger.error("Daily retention maintenance failed: %s", exc)
+        return None
 
 
 def cleanup_old_runs(db: Session, keep_runs: int = 100) -> int:
@@ -329,57 +362,57 @@ def get_scheduler() -> SyncScheduler:
     return sync_scheduler
 
 
-def start_scheduler(interval_minutes: Optional[int] = None, jitter_seconds: Optional[int] = None) -> bool:
-    """Start the scheduler with configuration from environment/database."""
+def start_scheduler(
+    schedule: Optional[Any] = None,
+    interval_min: Optional[int] = None,
+    jitter_sec: Optional[int] = None,
+    enabled: Optional[bool] = None,
+    *,
+    interval_minutes: Optional[int] = None,
+    jitter_seconds: Optional[int] = None,
+) -> bool:
+    """Start the scheduler with durable configuration from SQLite."""
     try:
-        # If no explicit values provided, try to load from database first
-        if interval_minutes is None or jitter_seconds is None:
-            try:
-                db = get_db_session()
-                
-                # Try to load from database
-                interval_config = db.execute(
-                    select(ConfigKV).where(ConfigKV.key == "interval_min")
-                ).scalar_one_or_none()
-                
-                jitter_config = db.execute(
-                    select(ConfigKV).where(ConfigKV.key == "jitter_sec")
-                ).scalar_one_or_none()
-                
-                # Use database values if available
-                interval = interval_minutes or (int(interval_config.value) if interval_config else None)
-                jitter = jitter_seconds or (int(jitter_config.value) if jitter_config else None)
-                
-                db.close()
-            except Exception as e:
-                logger.warning(f"Could not load schedule from database: {e}")
-                interval = interval_minutes
-                jitter = jitter_seconds
+        from ..configuration import Configuration, ScheduleSettings
+        from .db import get_db_session
+
+        if schedule is not None:
+            schedule_settings = schedule
         else:
-            interval = interval_minutes
-            jitter = jitter_seconds
-        
-        # Fall back to config/environment defaults if still None
-        if interval is None or jitter is None:
-            if config:
-                scheduler_config = config.get_scheduler_config()
-                interval = interval or scheduler_config["interval_min"]
-                jitter = jitter or scheduler_config["jitter_sec"]
-            else:
-                interval = interval or 5
-                jitter = jitter or 20
-        
-        # Start scheduler
+            try:
+                cfg = Configuration(session_factory=get_db_session)
+                schedule_settings = cfg.get_schedule()
+            except Exception as e:
+                logger.warning("Could not load schedule from Configuration: %s", e)
+                schedule_settings = ScheduleSettings()
+
+        eff_interval = interval_min or interval_minutes or schedule_settings.interval_min
+        eff_jitter = jitter_sec or jitter_seconds or schedule_settings.jitter_sec
+        is_enabled = enabled if enabled is not None else schedule_settings.enabled
+
         sync_scheduler.start()
-        
-        # Add sync job
-        sync_scheduler.add_sync_job(interval, jitter)
-        
-        logger.info(f"Scheduler started with {interval}min interval")
+
+        if is_enabled:
+            sync_scheduler.add_sync_job(eff_interval, eff_jitter)
+            logger.info("Scheduler started with %dmin interval (±%ds jitter)", eff_interval, eff_jitter)
+        else:
+            sync_scheduler.remove_sync_job()
+            logger.info("Scheduler started with sync job disabled")
+
+        # Schedule daily history retention maintenance job only if enabled/cutover-validated (ADR 0008, Issue #14)
+        try:
+            with get_db_session() as session:
+                val = session.execute(
+                    select(ConfigKV.value).where(ConfigKV.key == "retention_enabled")
+                ).scalar_one_or_none()
+                if val == "true":
+                    sync_scheduler.add_retention_job()
+        except Exception:
+            pass
+
         return True
-        
     except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
+        logger.error("Failed to start scheduler: %s", e)
         return False
 
 

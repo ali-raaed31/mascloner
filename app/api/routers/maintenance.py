@@ -1,11 +1,12 @@
 """Maintenance and diagnostic endpoints."""
 
 from __future__ import annotations
+from datetime import datetime, timezone
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select
@@ -19,6 +20,65 @@ from ..schemas import ApiResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["maintenance"])
+
+
+@router.get("/maintenance/retention", response_model=Dict[str, Any])
+async def get_retention_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Get current retention policy configuration and last retention run report."""
+    try:
+        from ...configuration import Configuration
+        from ...retention import RetentionService
+
+        cfg = Configuration(session_factory=lambda: db)
+        policy = cfg.get_retention_policy()
+        service = RetentionService.get_instance(session_factory=lambda: db)
+        last_report = service.get_last_report()
+
+        return {
+            "retention_days": policy.retention_days,
+            "last_report": last_report.model_dump(mode="json") if last_report else None,
+        }
+    except Exception as exc:
+        logger.error("Failed to get retention status: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get retention status: {exc}",
+        )
+
+
+@router.post("/maintenance/retention", response_model=ApiResponse)
+async def trigger_retention(
+    dry_run: bool = False,
+    retention_days: Optional[int] = None,
+    batch_size: int = 100,
+    db: Session = Depends(get_db),
+) -> ApiResponse:
+    """Execute a 60-day history retention pass (supports dry_run)."""
+    try:
+        from ...retention import RetentionService
+
+        service = RetentionService.get_instance(session_factory=lambda: db)
+        report = service.apply_retention(
+            retention_days=retention_days,
+            dry_run=dry_run,
+            batch_size=batch_size,
+        )
+
+        return ApiResponse(
+            success=report.success,
+            message=report.error if not report.success else (
+                f"Retention dry-run completed: would prune {report.runs_deleted} runs"
+                if report.is_dry_run
+                else f"Retention pass completed: pruned {report.runs_deleted} runs"
+            ),
+            data=report.model_dump(mode="json"),
+        )
+    except Exception as exc:
+        logger.error("Retention trigger failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Retention execution failed: {exc}",
+        )
 
 
 @router.post("/maintenance/cleanup", response_model=ApiResponse)
@@ -135,3 +195,39 @@ async def get_database_info():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get database info: {exc}",
         )
+
+@router.post("/maintenance/backup", response_model=ApiResponse)
+async def trigger_online_backup():
+    """Trigger an online, consistency-verified SQLite database backup."""
+    from ...maintenance.backup import perform_online_backup, OnlineBackupError
+    from ..db import db_path
+
+    try:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        target_dir = Path("/var/backups/mascloner") if Path("/var/backups/mascloner").exists() else db_path.parent / "backups"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / f"mascloner_backup_{timestamp}_database.db"
+
+        info = perform_online_backup(source_db_path=db_path, target_path=target_file)
+        return ApiResponse(
+            success=True,
+            message="Online database backup completed and verified successfully",
+            data={
+                "target": info["target"],
+                "size_bytes": info["size_bytes"],
+                "verified": info["verified"],
+                "timestamp": info["timestamp"],
+            },
+        )
+    except OnlineBackupError as exc:
+        logger.error("Online backup failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database backup failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Unexpected error during backup: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database backup failed: {exc}",
+        ) from exc

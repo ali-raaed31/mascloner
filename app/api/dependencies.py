@@ -1,7 +1,7 @@
 """FastAPI dependencies for MasCloner.
 
 This module provides dependency injection for shared resources like
-the rclone runner, scheduler, and configuration manager.
+the sync executor, scheduler, and configuration module.
 """
 
 from __future__ import annotations
@@ -10,11 +10,11 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from .config import ConfigManager
-from .rclone_runner import RcloneRunner, get_runner as get_rclone_runner_impl
 from .scheduler import SyncScheduler
 
 if TYPE_CHECKING:
-    pass
+    from app.execution import SyncExecutor
+    from app.configuration import Configuration
 
 
 @lru_cache(maxsize=1)
@@ -30,15 +30,6 @@ def get_config_manager() -> ConfigManager:
     return config
 
 
-def get_rclone_runner() -> RcloneRunner:
-    """Get the singleton RcloneRunner instance.
-
-    Uses the same singleton as the scheduler to ensure consistency
-    between API endpoints and background sync jobs.
-    """
-    return get_rclone_runner_impl()
-
-
 @lru_cache(maxsize=1)
 def get_sync_scheduler() -> SyncScheduler:
     """Get the singleton SyncScheduler instance.
@@ -50,15 +41,32 @@ def get_sync_scheduler() -> SyncScheduler:
     return sync_scheduler
 
 
+@lru_cache(maxsize=1)
+def get_sync_executor():
+    """Get the singleton SyncExecutor instance."""
+    from app.execution import SyncExecutor
+
+    return SyncExecutor.get_instance()
+
+
 # Dependency functions for FastAPI
-def get_runner() -> RcloneRunner:
-    """FastAPI dependency for RcloneRunner."""
-    return get_rclone_runner()
-
-
 def get_scheduler() -> SyncScheduler:
     """FastAPI dependency for SyncScheduler."""
     return get_sync_scheduler()
+
+
+def get_executor():
+    """FastAPI dependency for SyncExecutor."""
+    return get_sync_executor()
+
+
+@lru_cache(maxsize=1)
+def get_configuration():
+    """Get the singleton Configuration module instance."""
+    from app.configuration import Configuration
+    from app.api.db import get_db_session
+
+    return Configuration(session_factory=get_db_session)
 
 
 def get_config() -> ConfigManager:
@@ -71,5 +79,5 @@ def reset_dependencies() -> None:
     """Reset all cached dependencies (for testing)."""
     get_config_manager.cache_clear()
     get_sync_scheduler.cache_clear()
-    # Note: RcloneRunner singleton is managed in rclone_runner.py
-
+    get_configuration.cache_clear()
+    get_sync_executor.cache_clear()

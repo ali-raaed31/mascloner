@@ -1,14 +1,13 @@
-"""Remote folder browsing and size estimation endpoints."""
+"""Remote folder browsing and size estimation endpoints using EndpointInspector."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, HTTPException, status
 
-from ..dependencies import get_runner
-from ..rclone_runner import RcloneRunner
+from ...inspection import EndpointInspector, UnsupportedEndpointError
 
 logger = logging.getLogger(__name__)
 
@@ -19,27 +18,41 @@ router = APIRouter(tags=["browse"])
 async def browse_remote_folders(
     remote_name: str,
     path: str = "",
-    runner: RcloneRunner = Depends(get_runner),
 ):
-    """Browse folders in a remote."""
+    """Browse folders in a remote endpoint safely without side effects."""
+    inspector = EndpointInspector()
     try:
         logger.info("API: browse folders request remote='%s' path='%s'", remote_name, path)
+        res = await inspector.browse_folders(remote_name, path=path)
 
-        folders = await runner.list_folders_async(remote_name, path)
+        if not res.success:
+            return {
+                "status": "error",
+                "success": False,
+                "error": res.error or "Unknown browsing error",
+                "folders": [],
+            }
 
         logger.info(
             "API: browse folders response remote='%s' path='%s' count=%d",
             remote_name,
             path,
-            len(folders),
+            len(res.folders),
         )
         return {
             "status": "success",
             "success": True,
-            "folders": folders,
+            "folders": res.folders,
             "remote": remote_name,
             "path": path,
+            "truncated": res.truncated,
+            "total_count": res.total_count,
         }
+    except UnsupportedEndpointError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.error("Failed to browse folders: %s", exc)
         return {
@@ -52,19 +65,28 @@ async def browse_remote_folders(
 
 @router.get("/estimate/size", response_model=Dict[str, Any])
 async def estimate_sync_size(
-    source: str,
-    dest: str,
-    runner: RcloneRunner = Depends(get_runner),
+    source: str = "",
+    dest: str = "",
 ):
-    """Estimate the size of a sync operation."""
+    """Estimate the size of a sync operation without mutating configuration."""
+    inspector = EndpointInspector()
     try:
-        size_info = await runner.estimate_sync_size_async(source, dest)
+        res = await inspector.estimate_size(source_path=source, dest_path=dest)
+        if not res.success:
+            return {
+                "status": "error",
+                "success": False,
+                "error": res.error or "Unknown estimation error",
+                "size_mb": 0,
+                "file_count": 0,
+                "folder_count": 0,
+            }
         return {
             "status": "success",
             "success": True,
-            "size_mb": size_info.get("size_mb", 0),
-            "file_count": size_info.get("file_count", 0),
-            "folder_count": size_info.get("folder_count", 0),
+            "size_mb": res.size_mb,
+            "file_count": res.file_count,
+            "folder_count": res.folder_count,
         }
     except Exception as exc:
         logger.error("Failed to estimate size: %s", exc)
@@ -76,4 +98,3 @@ async def estimate_sync_size(
             "file_count": 0,
             "folder_count": 0,
         }
-

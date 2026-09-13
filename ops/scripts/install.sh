@@ -494,8 +494,8 @@ print_next_steps() {
     echo
     echo_info "=== NEXT STEPS ==="
     echo
-    echo "1. 📁 Configure rclone remotes:"
-    echo "   sudo -u mascloner rclone config"
+    echo "1. 📁 Configure Google Drive and Nextcloud:"
+    echo "   Open the MasCloner web UI and use the Setup Wizard"
     echo
     echo "2. 🌐 Setup Cloudflare Tunnel (optional but recommended):"
     echo "   - Follow the Cloudflare Tunnel documentation"

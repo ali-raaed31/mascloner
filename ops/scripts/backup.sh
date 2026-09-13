@@ -26,18 +26,24 @@ mkdir -p "$BACKUP_DIR"
 
 echo_info "Starting MasCloner backup: $BACKUP_NAME"
 
-# Create backup archive
+# Create configuration backup archive (excludes live sqlite databases to prevent corruption)
 cd "$INSTALL_DIR"
 tar -czf "$BACKUP_DIR/$BACKUP_NAME.tar.gz" \
     --exclude='.venv' \
     --exclude='logs/*.log' \
     --exclude='__pycache__' \
+    --exclude='data/*.db*' \
     data/ etc/ .env
 
-# Create database backup
+# Create consistent, integrity-verified online database backup
 if [[ -f "$INSTALL_DIR/data/mascloner.db" ]]; then
-    sqlite3 "$INSTALL_DIR/data/mascloner.db" ".backup $BACKUP_DIR/${BACKUP_NAME}_database.db"
-    echo_info "Database backup created"
+    if [[ -f "$INSTALL_DIR/ops/scripts/backup_db.py" ]]; then
+        python3 "$INSTALL_DIR/ops/scripts/backup_db.py" --target "$BACKUP_DIR/${BACKUP_NAME}_database.db"
+        echo_info "Database backup created and integrity-verified"
+    else
+        sqlite3 "$INSTALL_DIR/data/mascloner.db" ".backup $BACKUP_DIR/${BACKUP_NAME}_database.db"
+        echo_warning "Database backup created via fallback sqlite3 .backup"
+    fi
 fi
 
 # Compress and encrypt sensitive configs
