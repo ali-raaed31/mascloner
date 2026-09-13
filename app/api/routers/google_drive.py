@@ -14,6 +14,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, status
 
 from ..config import config
+from ...inspection import EndpointInspector
 from ...configuration import (
     Configuration,
     ConfigurationLeaseError,
@@ -150,47 +151,15 @@ async def save_google_drive_oauth_config(request: GoogleDriveOAuthConfigRequest)
 
 @router.get("/status", response_model=GoogleDriveStatusResponse)
 async def get_google_drive_status():
-    """Get Google Drive configuration status."""
+    """Get Google Drive configuration status via EndpointInspector."""
     try:
-        cfg = Configuration(session_factory=get_db_session)
-        meta = cfg.get_endpoint_metadata("gdrive")
-        if not meta or meta.details.get("type") != "drive":
-            return GoogleDriveStatusResponse(configured=False)
-
-        scope = meta.details.get("scope")
-        folders = None
-
-        base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
-        try:
-            folder_process = await asyncio.create_subprocess_exec(
-                "rclone",
-                "--config",
-                rclone_config,
-                "--transfers=2",
-                "--checkers=2",
-                "lsd",
-                "gdrive:",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            folder_stdout, _ = await asyncio.wait_for(folder_process.communicate(), timeout=5)
-            if folder_process.returncode == 0:
-                folders = []
-                for line in folder_stdout.decode().strip().split("\n"):
-                    if line.strip():
-                        parts = line.strip().split()
-                        if len(parts) >= 5:
-                            folders.append(" ".join(parts[4:]))
-                folders = folders[:10]
-        except Exception as inner_exc:
-            logger.debug("Error getting folder list: %s", inner_exc)
-
+        inspector = EndpointInspector()
+        status_res = await inspector.get_source_status(include_preview_folders=True)
         return GoogleDriveStatusResponse(
-            configured=True,
-            remote_name="gdrive",
-            scope=scope,
-            folders=folders,
+            configured=status_res.configured,
+            remote_name=status_res.remote_name,
+            scope=status_res.scope,
+            folders=status_res.folders,
         )
     except Exception as exc:
         logger.error("Google Drive status check error: %s", exc)
@@ -199,55 +168,20 @@ async def get_google_drive_status():
 
 @router.post("/test", response_model=ApiResponse)
 async def test_google_drive_connection():
-    """Test Google Drive connection."""
+    """Test Google Drive connection via EndpointInspector."""
     try:
-        base_config = config.get_base_config()
-        rclone_config = str(base_config["base_dir"] / base_config["rclone_conf"])
-
-        cmd = [
-            "rclone",
-            "--config",
-            rclone_config,
-            "--transfers=4",
-            "--checkers=8",
-            "lsd",
-            "gdrive:",
-        ]
-
-        rclone_config_obj = config.get_rclone_config()
-        if rclone_config_obj.get("fast_list"):
-            cmd.append("--fast-list")
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            return ApiResponse(success=False, message="Connection test timeout")
-
-        if process.returncode == 0:
-            folders = []
-            for line in stdout.decode().strip().split("\n"):
-                if line.strip():
-                    parts = line.strip().split()
-                    if len(parts) >= 5:
-                        folders.append(" ".join(parts[4:]))
-
+        inspector = EndpointInspector()
+        test_res = await inspector.test_connection("gdrive")
+        if test_res.success:
+            browse_res = await inspector.browse_folders("gdrive", path="", limit=10)
             return ApiResponse(
                 success=True,
                 message="Google Drive connection successful",
-                data={"folders": folders[:10]},
+                data={"folders": browse_res.folders if browse_res.success else []},
             )
-
         return ApiResponse(
             success=False,
-            message=f"Connection failed: {stderr.decode() or 'Unknown error'}",
+            message=test_res.message,
         )
     except Exception as exc:
         logger.error("Google Drive connection test error: %s", exc)

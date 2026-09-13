@@ -73,33 +73,14 @@ async def get_status(
 
         remotes_configured = {"gdrive": False, "nextcloud": False}
         try:
-            base_config = cfg.get_base_config()
-            rclone_config_path = str(base_config["base_dir"] / base_config["rclone_conf"])
-
-            process = await asyncio.create_subprocess_exec(
-                "rclone",
-                "--config",
-                rclone_config_path,
-                "listremotes",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-                if process.returncode == 0:
-                    remotes_list = stdout.decode().strip()
-                    remotes_configured["gdrive"] = "gdrive:" in remotes_list
-                    remotes_configured["nextcloud"] = any(
-                        remote in remotes_list
-                        for remote in ["ncwebdav:", "nextcloud:", "nc:"]
-                    )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                logger.warning("Timeout checking rclone remotes")
+            from ...configuration import Configuration
+            typed_cfg = Configuration(session_factory=lambda: db)
+            gdrive_meta = typed_cfg.get_endpoint_metadata("gdrive")
+            nc_meta = typed_cfg.get_endpoint_metadata("ncwebdav")
+            remotes_configured["gdrive"] = bool(gdrive_meta and gdrive_meta.is_configured)
+            remotes_configured["nextcloud"] = bool(nc_meta and nc_meta.is_configured)
         except Exception as exc:
-            logger.warning("Failed to check rclone remotes: %s", exc)
+            logger.warning("Failed to check remotes configuration: %s", exc)
 
         sync_config = get_sync_config_from_db(db)
         config_valid = bool(

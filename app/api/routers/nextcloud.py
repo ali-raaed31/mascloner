@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
+from ...inspection import EndpointInspector
 from ...configuration import (
     Configuration,
     ConfigurationLeaseError,
@@ -79,6 +80,22 @@ async def test_nextcloud_webdav(request: WebDAVTestRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"WebDAV test failed: {exc}",
         ) from exc
+
+
+@router.post("", response_model=ApiResponse)
+async def test_existing_nextcloud():
+    """Test existing Nextcloud connection via EndpointInspector."""
+    try:
+        inspector = EndpointInspector()
+        test_res = await inspector.test_connection("ncwebdav")
+        return ApiResponse(
+            success=test_res.success,
+            message=test_res.message,
+            data={"remote_name": RCLONE_REMOTE_NAME},
+        )
+    except Exception as exc:
+        logger.error("Nextcloud test error: %s", exc)
+        return ApiResponse(success=False, message=f"Test error: {exc}")
 
 
 @router.get("/status")
