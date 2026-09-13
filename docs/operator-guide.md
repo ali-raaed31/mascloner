@@ -100,3 +100,34 @@ In the event of database corruption or VM recovery:
    ```bash
    curl -s http://127.0.0.1:8787/status | jq .
    ```
+
+---
+
+## 5. History Retention Policy (ADR 0008)
+
+Per [ADR 0008](file:///home/alirun/projects/cloner/docs/adr/0008-sixty-day-history-retention.md):
+- **Default Retention**: Terminal `SyncRun` records (`completed`, `failed`, `aborted`, `skipped`) are retained for **60 days**.
+- **Active Run Protection**: Runs in `pending` or `running` states are never eligible for deletion regardless of age.
+- **Atomic Deletion**: When an expired run is deleted, its dependent `FileEvents` and associated log files (`run.log_path`) are removed as part of the retention operation.
+- **Daily Automatic Schedule**: The background scheduler automatically executes the retention pass once per day at 03:00 UTC.
+
+### Operator Prune Command
+Operators can simulate or manually trigger history pruning using the CLI:
+```bash
+# Dry-run mode: verify what would be deleted without modifying database or filesystem
+mascloner prune --dry-run
+
+# Run retention manually with custom days override:
+mascloner prune --days 60 --batch-size 100
+```
+
+### API Endpoints
+- **Inspect Policy & Last Report**:
+  ```bash
+  curl -s http://127.0.0.1:8787/maintenance/retention | jq .
+  ```
+- **Trigger Retention On-Demand**:
+  ```bash
+  curl -X POST "http://127.0.0.1:8787/maintenance/retention?dry_run=true"
+  curl -X POST "http://127.0.0.1:8787/maintenance/retention?dry_run=false"
+  ```

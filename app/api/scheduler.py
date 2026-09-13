@@ -97,6 +97,42 @@ class SyncScheduler:
             logger.error(f"Failed to remove sync job: {e}")
             return False
 
+    def add_retention_job(
+        self,
+        hour: int = 3,
+        minute: int = 0,
+        job_id: str = "retention",
+    ) -> bool:
+        """Add or update daily history retention maintenance job (ADR 0008)."""
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            trigger = CronTrigger(hour=hour, minute=minute, timezone="UTC")
+            self.scheduler.add_job(
+                func=retention_job,
+                trigger=trigger,
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                name="Daily History Retention Maintenance",
+            )
+            logger.info("Scheduled daily retention maintenance job at %02d:%02d UTC", hour, minute)
+            return True
+        except Exception as e:
+            logger.error("Failed to add retention job: %s", e)
+            return False
+
+    def remove_retention_job(self, job_id: str = "retention") -> bool:
+        """Remove the retention maintenance job."""
+        try:
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+                logger.info("Retention job removed")
+            return True
+        except Exception as e:
+            logger.error("Failed to remove retention job: %s", e)
+            return False
+
     def is_running(self) -> bool:
         """Check if the background scheduler engine is running."""
         return bool(self.scheduler.running)
@@ -278,6 +314,25 @@ def sync_job(wait: bool = True) -> Any:
         _sync_lock.release()
 
 
+def retention_job() -> Optional[Any]:
+    """Daily maintenance job executing history retention policy."""
+    from ..retention import RetentionService
+    try:
+        logger.info("Starting daily retention maintenance job")
+        service = RetentionService.get_instance()
+        report = service.apply_retention()
+        logger.info(
+            "Daily retention completed: %d runs deleted, %d events deleted, %d logs deleted",
+            report.runs_deleted,
+            report.events_deleted,
+            report.logs_deleted,
+        )
+        return report
+    except Exception as exc:
+        logger.error("Daily retention maintenance failed: %s", exc)
+        return None
+
+
 def cleanup_old_runs(db: Session, keep_runs: int = 100) -> int:
     """Clean up old run records, keeping the most recent ones."""
     try:
@@ -354,6 +409,9 @@ def start_scheduler(
         else:
             sync_scheduler.remove_sync_job()
             logger.info("Scheduler started with sync job disabled")
+
+        # Schedule daily history retention maintenance job (ADR 0008)
+        sync_scheduler.add_retention_job()
 
         return True
     except Exception as e:

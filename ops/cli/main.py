@@ -10,7 +10,7 @@ import typer
 from click.exceptions import ClickException
 from rich.console import Console
 
-from ops.cli.commands import update, status, rollback
+from ops.cli.commands import update, status, rollback, prune
 
 # Initialize Typer app
 app = typer.Typer(
@@ -27,6 +27,7 @@ console = Console()
 app.command(name="update")(update.main)
 app.command(name="status")(status.main)
 app.command(name="rollback")(rollback.main)
+app.command(name="prune")(prune.main)
 
 
 @app.callback()

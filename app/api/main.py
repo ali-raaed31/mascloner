@@ -42,7 +42,9 @@ async def lifespan(app: FastAPI):
 
     try:
         from ..execution import SyncExecutor
+        from ..retention import RetentionService
         SyncExecutor.reset_instance()
+        RetentionService.reset_instance()
         init_db()
         logger.info("Database initialized")
 
@@ -74,6 +76,8 @@ async def lifespan(app: FastAPI):
         executor = SyncExecutor.get_instance()
         executor.shutdown(timeout=10.0)
         SyncExecutor.reset_instance()
+        from ..retention import RetentionService
+        RetentionService.reset_instance()
         logger.info("SyncExecutor shutdown completed")
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("SyncExecutor shutdown error: %s", exc)

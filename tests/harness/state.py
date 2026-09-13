@@ -115,6 +115,12 @@ class ProcessStateReset:
         except Exception:
             pass
 
+        try:
+            from app.retention import RetentionService
+            RetentionService.reset_instance()
+        except Exception:
+            pass
+
     def restore(self) -> None:
         """Restore original environment and references."""
         # Stop scheduler if running
@@ -127,6 +133,12 @@ class ProcessStateReset:
         try:
             from app.execution import SyncExecutor
             SyncExecutor.reset_instance()
+        except Exception:
+            pass
+
+        try:
+            from app.retention import RetentionService
+            RetentionService.reset_instance()
         except Exception:
             pass
 

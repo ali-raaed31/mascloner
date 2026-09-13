@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select
@@ -20,6 +20,65 @@ from ..schemas import ApiResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["maintenance"])
+
+
+@router.get("/maintenance/retention", response_model=Dict[str, Any])
+async def get_retention_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Get current retention policy configuration and last retention run report."""
+    try:
+        from ...configuration import Configuration
+        from ...retention import RetentionService
+
+        cfg = Configuration(session_factory=lambda: db)
+        policy = cfg.get_retention_policy()
+        service = RetentionService.get_instance(session_factory=lambda: db)
+        last_report = service.get_last_report()
+
+        return {
+            "retention_days": policy.retention_days,
+            "last_report": last_report.model_dump(mode="json") if last_report else None,
+        }
+    except Exception as exc:
+        logger.error("Failed to get retention status: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get retention status: {exc}",
+        )
+
+
+@router.post("/maintenance/retention", response_model=ApiResponse)
+async def trigger_retention(
+    dry_run: bool = False,
+    retention_days: Optional[int] = None,
+    batch_size: int = 100,
+    db: Session = Depends(get_db),
+) -> ApiResponse:
+    """Execute a 60-day history retention pass (supports dry_run)."""
+    try:
+        from ...retention import RetentionService
+
+        service = RetentionService.get_instance(session_factory=lambda: db)
+        report = service.apply_retention(
+            retention_days=retention_days,
+            dry_run=dry_run,
+            batch_size=batch_size,
+        )
+
+        return ApiResponse(
+            success=report.success,
+            message=report.error if not report.success else (
+                f"Retention dry-run completed: would prune {report.runs_deleted} runs"
+                if report.is_dry_run
+                else f"Retention pass completed: pruned {report.runs_deleted} runs"
+            ),
+            data=report.model_dump(mode="json"),
+        )
+    except Exception as exc:
+        logger.error("Retention trigger failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Retention execution failed: {exc}",
+        )
 
 
 @router.post("/maintenance/cleanup", response_model=ApiResponse)
