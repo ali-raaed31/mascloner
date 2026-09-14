@@ -140,36 +140,38 @@ verification = st.session_state.get("route_verification")
 card_col1, card_col2 = st.columns(2)
 
 with card_col1:
-    st.markdown("#### 📁 Google Drive Source")
-    st.markdown(f"**Path**: `{gdrive_src}`")
-    st.markdown("**Remote Target**: `gdrive:`")
-    if verification:
-        if verification["gdrive_ok"]:
-            st.success(f"🟢 **Endpoint Verified**: {verification['gdrive_msg']}")
+    with st.container(border=True):
+        st.markdown("#### 📁 Google Drive Source")
+        st.markdown(f"**Path**: `{gdrive_src}`")
+        st.markdown("**Remote Target**: `gdrive:`")
+        if verification:
+            if verification["gdrive_ok"]:
+                st.success(f"🟢 **Endpoint Verified**: {verification['gdrive_msg']}")
+            else:
+                st.error(f"🔴 **Verification Failed**: {verification['gdrive_msg']}")
         else:
-            st.error(f"🔴 **Verification Failed**: {verification['gdrive_msg']}")
-    else:
-        gdrive_status = api.get_google_drive_status() or {}
-        if gdrive_status.get("connected"):
-            st.markdown("🟢 **Status**: Authenticated & Connected")
-        else:
-            st.markdown("🔴 **Status**: Disconnected / Expired")
+            gdrive_status = api.get_google_drive_status() or {}
+            if gdrive_status.get("connected"):
+                st.markdown("🟢 **Status**: Authenticated & Connected")
+            else:
+                st.markdown("🔴 **Status**: Disconnected / Expired")
 
 with card_col2:
-    st.markdown("#### ☁️ Nextcloud Destination")
-    st.markdown(f"**Path**: `{nc_dest_path}`")
-    st.markdown("**Remote Target**: `ncwebdav:`")
-    if verification:
-        if verification["nc_ok"]:
-            st.success(f"🟢 **Endpoint Verified**: {verification['nc_msg']}")
+    with st.container(border=True):
+        st.markdown("#### ☁️ Nextcloud Destination")
+        st.markdown(f"**Path**: `{nc_dest_path}`")
+        st.markdown("**Remote Target**: `ncwebdav:`")
+        if verification:
+            if verification["nc_ok"]:
+                st.success(f"🟢 **Endpoint Verified**: {verification['nc_msg']}")
+            else:
+                st.error(f"🔴 **Verification Failed**: {verification['nc_msg']}")
         else:
-            st.error(f"🔴 **Verification Failed**: {verification['nc_msg']}")
-    else:
-        nc_status = api.get_nextcloud_status() or {}
-        if nc_status.get("configured"):
-            st.markdown("🟢 **Status**: WebDAV Configured")
-        else:
-            st.markdown("🔴 **Status**: Not Configured")
+            nc_status = api.get_nextcloud_status() or {}
+            if nc_status.get("configured"):
+                st.markdown("🟢 **Status**: WebDAV Configured")
+            else:
+                st.markdown("🔴 **Status**: Not Configured")
 
 if verification:
     st.caption(f"Last verified: {format_iso_time(verification['timestamp'], include_relative=True)}")
@@ -202,17 +204,13 @@ else:
 
     last_col1, last_col2, last_col3, last_col4 = st.columns(4)
     with last_col1:
-        st.markdown(f"**Run #{run_id}**")
-        st.markdown(status_pill)
+        st.metric("Latest Execution", f"Run #{run_id}", delta=status.upper(), border=True)
     with last_col2:
-        st.markdown("**Completed**")
-        st.markdown(format_iso_time(completed_at or started_at))
+        st.metric("Completed At", format_iso_time(completed_at or started_at), border=True)
     with last_col3:
-        st.markdown("**Duration / Volume**")
-        st.markdown(f"{format_duration(duration)} ({format_bytes(bytes_trans)})")
+        st.metric("Duration / Volume", format_duration(duration), f"{format_bytes(bytes_trans)} synced", border=True)
     with last_col4:
-        st.markdown("**Files Mutated**")
-        st.markdown(f"{files_trans} files")
+        st.metric("Files Mutated", f"{files_trans} files", border=True)
 
     if error_msg:
         st.error(f"**Run Failure Details**: {error_msg}")

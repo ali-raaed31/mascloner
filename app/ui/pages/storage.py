@@ -66,7 +66,7 @@ st.divider()
 col_gd, col_nc = st.columns(2)
 
 # --- Google Drive Card ---
-with col_gd:
+with col_gd.container(border=True):
     st.markdown("### 📁 Google Drive Source")
     st.markdown(f"**Target Remote**: `gdrive`")
     st.markdown(f"**Source Root Path**: `{gdrive_src}`")
@@ -139,7 +139,7 @@ with col_gd:
 
 
 # --- Nextcloud WebDAV Card ---
-with col_nc:
+with col_nc.container(border=True):
     st.markdown("### ☁️ Nextcloud Destination")
     st.markdown(f"**Target Remote**: `ncwebdav`")
     st.markdown(f"**Destination Path**: `{nc_dest_path}`")

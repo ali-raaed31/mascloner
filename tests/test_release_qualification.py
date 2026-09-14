@@ -32,18 +32,18 @@ from tests.harness.state import ProcessStateReset
 def test_authoritative_version_surfaces():
     """All version surfaces consistently report 3.1.0."""
     # App package version
-    assert app_version == "3.1.0"
+    assert app_version == "3.1.5"
 
     # CLI package version
-    assert cli_version == "3.1.0"
+    assert cli_version == "3.1.5"
 
     # FastAPI OpenAPI version
-    assert app.version == "3.1.0"
+    assert app.version == "3.1.5"
 
     # Root VERSION file
     version_file = Path(__file__).resolve().parent.parent / "VERSION"
     assert version_file.exists()
-    assert version_file.read_text().strip() == "3.1.0"
+    assert version_file.read_text().strip() == "3.1.5"
 
 
 def test_clean_install_matrix(isolated_fresh_install: InstallationRoot, fresh_client: TestClient):

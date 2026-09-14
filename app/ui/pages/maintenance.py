@@ -40,13 +40,13 @@ last_report = retention_status.get("last_report") or {}
 
 m_col1, m_col2, m_col3 = st.columns(3)
 with m_col1:
-    st.metric("Retention Window", f"{retention_days} Days")
+    st.metric("Retention Window", f"{retention_days} Days", border=True)
 with m_col2:
     last_pruned_runs = last_report.get("runs_pruned", 0)
-    st.metric("Last Pruned Runs", f"{last_pruned_runs}")
+    st.metric("Last Pruned Runs", f"{last_pruned_runs}", border=True)
 with m_col3:
     last_pruned_events = last_report.get("events_pruned", 0)
-    st.metric("Last Pruned Events", f"{last_pruned_events}")
+    st.metric("Last Pruned Events", f"{last_pruned_events}", border=True)
 
 if last_report.get("timestamp"):
     st.caption(f"Last retention pass executed: {format_iso_time(last_report.get('timestamp'))}")
@@ -78,13 +78,11 @@ db_info = api.get_database_info() or {}
 db_path = db_info.get("database_path", "/srv/mascloner/mascloner.db")
 db_size = db_info.get("database_size_bytes") or db_info.get("size_bytes", 0)
 
-b_col1, b_col2 = st.columns([2, 1])
+b_col1, b_col2 = st.columns(2)
 with b_col1:
-    st.markdown(f"**Database Location**: `{db_path}`")
-    st.markdown(f"**Current Database Size**: `{format_bytes(db_size)}`")
+    st.metric("Database Size", format_bytes(db_size), help=f"Location: {db_path}", border=True)
 with b_col2:
-    st.markdown(f"**Total Runs Stored**: `{db_info.get('total_runs', 0)}`")
-    st.markdown(f"**Total Events Stored**: `{db_info.get('total_events', 0)}`")
+    st.metric("Total Runs Stored", f"{db_info.get('total_runs', 0)}", f"{db_info.get('total_events', 0)} events", border=True)
 
 if st.button("📦 Create Verified Recovery Backup Now", type="primary", use_container_width=True):
     with st.spinner("Generating consistent database snapshot & computing SHA-256..."):
