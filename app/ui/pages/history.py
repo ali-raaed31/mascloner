@@ -39,28 +39,30 @@ api = get_api()
 st.title("📋 Run History & Audit")
 render_hero_bar(api)
 
-# 1. Filters & Search Bar
-filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1, 1])
+# 1. Filters & Search Bar (Streamlit 1.63 st.pills)
+filter_col1, filter_col2 = st.columns([3, 1])
 
 with filter_col1:
-    status_choice = st.selectbox(
+    status_choice = st.pills(
         "Filter by Status",
         options=["All Statuses", "completed", "failed", "aborted", "skipped", "running"],
-        index=0,
+        default="All Statuses",
+        key="history_status_pills",
     )
 
 with filter_col2:
-    limit_choice = st.selectbox(
-        "Max Runs",
-        options=[10, 25, 50, 100],
-        index=1,
-    )
+    sub_c1, sub_c2 = st.columns([1, 1])
+    with sub_c1:
+        limit_choice = st.selectbox(
+            "Max",
+            options=[10, 25, 50, 100],
+            index=1,
+        )
+    with sub_c2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
 
-with filter_col3:
-    if st.button("🔄 Refresh History", use_container_width=True):
-        st.rerun()
-
-status_query = None if status_choice == "All Statuses" else status_choice
+status_query = None if (not status_choice or status_choice == "All Statuses") else status_choice
 raw_runs = api.get_runs(limit=limit_choice, status=status_query)
 if isinstance(raw_runs, dict):
     runs_list = raw_runs.get("runs", [])

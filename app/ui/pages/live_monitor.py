@@ -52,10 +52,10 @@ if "stream_paused" not in st.session_state:
 # Controls bar (outside fragment so clicks are persistent)
 filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1.5, 1])
 with filter_col1:
-    log_filter = st.selectbox(
+    log_filter = st.segmented_control(
         "Log Level Filter",
         options=["All Logs", "Errors & Warnings Only", "Errors Only"],
-        index=0,
+        default="All Logs",
     )
 with filter_col2:
     auto_refresh = st.toggle("⚡ Live Polling Stream", value=True, help="Toggle automatic real-time streaming")

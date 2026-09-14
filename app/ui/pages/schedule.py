@@ -134,25 +134,16 @@ PRESETS = {
 }
 
 st.markdown("##### ⚡ 1-Click Engine Presets")
-p_col1, p_col2, p_col3 = st.columns(3)
-
-with p_col1:
-    if st.button("Apply Conservative Preset", use_container_width=True):
-        api.update_rclone_config(PRESETS["Conservative (Low Resource)"])
-        st.toast("Applied Conservative preset")
-        st.rerun()
-
-with p_col2:
-    if st.button("Apply Balanced Preset", type="secondary", use_container_width=True):
-        api.update_rclone_config(PRESETS["Balanced (Recommended)"])
-        st.toast("Applied Balanced preset")
-        st.rerun()
-
-with p_col3:
-    if st.button("Apply High-Throughput Preset", use_container_width=True):
-        api.update_rclone_config(PRESETS["High-Throughput (Fast Network)"])
-        st.toast("Applied High-Throughput preset")
-        st.rerun()
+selected_preset = st.segmented_control(
+    "Apply Engine Profile",
+    options=list(PRESETS.keys()),
+    default=None,
+    key="engine_preset_segmented",
+)
+if selected_preset and selected_preset in PRESETS:
+    api.update_rclone_config(PRESETS[selected_preset])
+    st.toast(f"Applied {selected_preset}")
+    st.rerun()
 
 # Custom tuning form
 with st.form("rclone_tuning_form"):
