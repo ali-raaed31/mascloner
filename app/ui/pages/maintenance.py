@@ -56,7 +56,7 @@ with st.expander("⚡ Run Manual Retention Cleanup", expanded=False):
     custom_days = st.number_input("Retention Threshold (Days)", min_value=1, max_value=365, value=retention_days)
 
     if st.button("🚀 Execute Retention Pass", type="primary"):
-        with st.spinner("Executing retention pass..."):
+        with st.spinner("Executing retention pass...", show_time=True):
             ret_res = api.trigger_retention(dry_run=is_dry_run, retention_days=int(custom_days))
             if ret_res:
                 data = ret_res.get("data", ret_res)
@@ -85,7 +85,7 @@ with b_col2:
     st.metric("Total Runs Stored", f"{db_info.get('total_runs', 0)}", f"{db_info.get('total_events', 0)} events", border=True)
 
 if st.button("📦 Create Verified Recovery Backup Now", type="primary", use_container_width=True):
-    with st.spinner("Generating consistent database snapshot & computing SHA-256..."):
+    with st.spinner("Generating consistent database snapshot & computing SHA-256...", show_time=True):
         backup_res = api.create_backup_bundle()
         if backup_res and backup_res.get("success", True):
             b_data = backup_res.get("data", backup_res)

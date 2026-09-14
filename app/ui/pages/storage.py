@@ -44,7 +44,7 @@ with header_col1:
 
 with header_col2:
     if st.button("⚡ Verify Both Endpoints", help="Test both Google Drive API and Nextcloud WebDAV connectivity", use_container_width=True):
-        with st.spinner("Probing endpoints..."):
+        with st.spinner("Probing endpoints...", show_time=True):
             gd_res = api.test_google_drive_connection() or {}
             nc_res = api.test_nextcloud() or {}
             st.session_state.route_verification = {
@@ -86,7 +86,7 @@ with col_gd.container(border=True):
             st.error("🔴 Disconnected / Missing Token")
 
     if st.button("🔍 Test Google Drive Connection", key="test_gd_btn", use_container_width=True):
-        with st.spinner("Testing Google Drive..."):
+        with st.spinner("Testing Google Drive...", show_time=True):
             res = api.test_google_drive_connection() or {}
             if res.get("success"):
                 st.success(f"Connection test passed: {res.get('message', 'OK')}")
@@ -159,7 +159,7 @@ with col_nc.container(border=True):
             st.error("🔴 Nextcloud WebDAV Not Configured")
 
     if st.button("🔍 Test Nextcloud Connection", key="test_nc_btn", use_container_width=True):
-        with st.spinner("Testing Nextcloud WebDAV..."):
+        with st.spinner("Testing Nextcloud WebDAV...", show_time=True):
             res = api.test_nextcloud() or {}
             if res.get("success"):
                 st.success(f"WebDAV test passed: {res.get('message', 'OK')}")

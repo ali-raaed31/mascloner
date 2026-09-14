@@ -156,6 +156,7 @@ for run in runs_list:
                 file_name=f"mascloner_run_{run_id}_audit.csv",
                 mime="text/csv",
                 key=f"csv_btn_{run_id}",
+                on_click="ignore",
             )
 
             # Display event table
@@ -186,6 +187,6 @@ for run in runs_list:
                         log_lines.append(entry.get("raw") or entry.get("message") or str(entry))
                     else:
                         log_lines.append(str(entry))
-                st.code("\n".join(log_lines), language="bash")
+                st.code("\n".join(log_lines), language="bash", height=300)
             else:
                 st.caption("No log records available for this run.")

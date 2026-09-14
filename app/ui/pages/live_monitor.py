@@ -207,7 +207,7 @@ def render_live_telemetry():
 
     if rendered_lines:
         log_content = "\n".join(rendered_lines[-200:])  # display latest 200 lines
-        st.code(log_content, language="bash")
+        st.code(log_content, language="bash", height=420)
     else:
         st.caption("No log entries match the selected filter.")
 

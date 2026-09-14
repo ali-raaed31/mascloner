@@ -123,7 +123,7 @@ col_btn, col_down = st.columns([2, 1])
 
 with col_btn:
     if st.button("🩺 Run Full Preflight Diagnostics Suite", type="primary", use_container_width=True):
-        with st.spinner("Running diagnostics across all subsystems..."):
+        with st.spinner("Running diagnostics across all subsystems...", show_time=True):
             st.session_state.diag_report = run_diagnostics()
 
 report = st.session_state.diag_report
@@ -137,6 +137,7 @@ if report:
             file_name=f"mascloner_diagnostics_{report['timestamp'][:10]}.json",
             mime="application/json",
             use_container_width=True,
+            on_click="ignore",
         )
 
     st.markdown("---")

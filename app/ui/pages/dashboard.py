@@ -119,7 +119,7 @@ with route_col_header:
 
 with route_col_action:
     if st.button("⚡ Verify Endpoints", help="Probe both Google Drive and Nextcloud WebDAV to verify paths exist and are accessible", use_container_width=True):
-        with st.spinner("Probing Google Drive & Nextcloud..."):
+        with st.spinner("Probing Google Drive & Nextcloud...", show_time=True):
             gdrive_res = api.test_google_drive_connection() or {}
             nc_res = api.test_nextcloud() or {}
             st.session_state.route_verification = {
