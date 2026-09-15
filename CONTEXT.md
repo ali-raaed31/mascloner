@@ -36,6 +36,10 @@ _Avoid_: GDrive, SourceRemote, Master, Origin
 The authenticated Nextcloud WebDAV endpoint and selected folder to which files are copied during synchronization.
 _Avoid_: NextcloudWebdav, DestRemote, Replica, Target
 
+**SyncRoute**:
+The configured pairing of a `GoogleDriveSource` root folder and a `NextcloudDestination` target folder that defines the permanent synchronization pathway.
+_Avoid_: FolderPair, Mapping, SyncPaths, PathConfig
+
 ### Configuration & Retention
 
 **RetentionPolicy**:

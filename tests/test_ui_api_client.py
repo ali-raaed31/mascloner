@@ -90,3 +90,41 @@ def test_api_client_nextcloud_methods():
 
         client.remove_remote("ncwebdav")
         mock_req.assert_called_with("DELETE", "/test/nextcloud")
+
+
+def test_api_client_maintenance_and_oauth_methods():
+    client = APIClient(base_url="http://127.0.0.1:8787")
+    
+    with patch.object(client, "_make_request") as mock_req:
+        mock_req.return_value = {"success": True}
+
+        # Retention status
+        client.get_retention_status()
+        mock_req.assert_called_with("GET", "/maintenance/retention")
+
+        # Trigger retention
+        client.trigger_retention(dry_run=True, retention_days=30)
+        mock_req.assert_called_with(
+            "POST",
+            "/maintenance/retention",
+            params={"dry_run": True, "retention_days": 30},
+        )
+
+        client.trigger_retention_cleanup()
+        mock_req.assert_called_with(
+            "POST",
+            "/maintenance/retention",
+            params={"dry_run": False, "retention_days": None},
+        )
+
+        # Create backup bundle
+        client.create_backup_bundle()
+        mock_req.assert_called_with("POST", "/maintenance/backup")
+
+        # Test OAuth credentials
+        client.test_oauth_credentials("test-client-id", "test-secret")
+        mock_req.assert_called_with(
+            "POST",
+            "/oauth/google-drive/oauth-config/test",
+            json={"client_id": "test-client-id", "client_secret": "test-secret"},
+        )

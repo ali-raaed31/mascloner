@@ -132,9 +132,14 @@ class APIClient:
         """Stop the scheduler."""
         return self._make_request("POST", "/schedule/stop")
 
-    def get_runs(self, limit: int = 50) -> Optional[Dict[str, Any]]:
-        """Get sync runs."""
-        return self._make_request("GET", f"/runs?limit={limit}")
+    def get_runs(
+        self, limit: int = 50, status: Optional[str] = None
+    ) -> Optional[Any]:
+        """Get sync runs, optionally filtered by status."""
+        params: Dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        return self._make_request("GET", "/runs", params=params)
 
     def trigger_sync(self) -> Optional[Dict[str, Any]]:
         """Trigger manual sync."""
@@ -192,6 +197,37 @@ class APIClient:
     def get_database_info(self) -> Optional[Dict[str, Any]]:
         """Get database information."""
         return self._make_request("GET", "/database/info")
+
+    def get_retention_status(self) -> Optional[Dict[str, Any]]:
+        """Get current retention policy configuration and last run report."""
+        return self._make_request("GET", "/maintenance/retention")
+
+    def trigger_retention(
+        self, dry_run: bool = False, retention_days: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Execute a 60-day history retention pass."""
+        params = {"dry_run": dry_run, "retention_days": retention_days}
+        return self._make_request("POST", "/maintenance/retention", params=params)
+
+    def trigger_retention_cleanup(
+        self, dry_run: bool = False, retention_days: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Execute a 60-day history retention pass (alias)."""
+        return self.trigger_retention(dry_run=dry_run, retention_days=retention_days)
+
+    def create_backup_bundle(self) -> Optional[Dict[str, Any]]:
+        """Trigger an online, consistency-verified SQLite database backup."""
+        return self._make_request("POST", "/maintenance/backup")
+
+    def test_oauth_credentials(
+        self, client_id: str, client_secret: str
+    ) -> Optional[Dict[str, Any]]:
+        """Test Google Drive OAuth custom client credentials."""
+        return self._make_request(
+            "POST",
+            "/oauth/google-drive/oauth-config/test",
+            json={"client_id": client_id, "client_secret": client_secret},
+        )
 
     def get_google_drive_oauth_config(self) -> Optional[Dict[str, Any]]:
         """Get Google Drive OAuth client configuration."""

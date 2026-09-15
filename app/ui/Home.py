@@ -1,34 +1,43 @@
-"""
-MasCloner Streamlit Web UI
+"""MasCloner Streamlit Web UI.
 
-Main entry point for the web interface.
+Main entry point and declarative navigation router for the console.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Optional
-
+import sys
+from pathlib import Path
 import streamlit as st
 
-from api_client import APIClient
-from components.auth import is_auth_required, render_login_form, render_logout_button, require_auth
+# Ensure repository root and UI directory are on sys.path
+root_dir = Path(__file__).resolve().parent.parent.parent
+ui_dir = Path(__file__).resolve().parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+if str(ui_dir) not in sys.path:
+    sys.path.insert(0, str(ui_dir))
+
+try:
+    from app.ui.api_client import APIClient
+    from app.ui.components.auth import is_auth_required, render_logout_button, require_auth
+except ImportError:
+    from api_client import APIClient
+    from components.auth import is_auth_required, render_logout_button, require_auth
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Home - MasCloner",
-    page_icon="🏠",
+    page_title="MasCloner Console",
+    page_icon="🔄",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "MasCloner - Automated Google Drive to Nextcloud sync",
+        "About": "MasCloner v3.1.0 - Automated Google Drive to Nextcloud sync",
     },
 )
 
 
-# Initialize API client
 @st.cache_resource
 def get_api_client():
     return APIClient()
@@ -36,239 +45,31 @@ def get_api_client():
 
 api = get_api_client()
 
-# Check authentication first
+# Enforce centralized authentication boundary
 if not require_auth(api):
     st.stop()
 
-# Sidebar Navigation
-st.sidebar.title("🔄 MasCloner")
+# Sidebar Branding & Global Info
+st.sidebar.markdown("## 🔄 **MasCloner** `v3.1.0`")
 render_logout_button()
-st.sidebar.markdown("---")
+st.sidebar.divider()
 
+# Declarative Multi-page Navigation
+pages = {
+    "Operations": [
+        st.Page("pages/dashboard.py", title="Live Dashboard", icon="⚡", default=True),
+        st.Page("pages/live_monitor.py", title="Live Monitor", icon="📡"),
+        st.Page("pages/history.py", title="Run History & Audit", icon="📋"),
+    ],
+    "Configuration": [
+        st.Page("pages/storage.py", title="Storage & Connections", icon="🔗"),
+        st.Page("pages/schedule.py", title="Schedule & Engine", icon="⏱️"),
+    ],
+    "System": [
+        st.Page("pages/maintenance.py", title="Retention & Backups", icon="🛡️"),
+        st.Page("pages/diagnostics.py", title="Diagnostics", icon="🩺"),
+    ],
+}
 
-# Check API connection
-def check_api_connection():
-    """Check if API is available."""
-    status = api.get_status()
-    if status:
-        st.sidebar.success("✅ API Connected")
-        return True
-    else:
-        st.sidebar.error("❌ API Disconnected")
-        st.sidebar.markdown("Please ensure the API server is running:")
-        st.sidebar.code("python -m app.api.main")
-        return False
-
-
-# Display connection status
-api_connected = check_api_connection()
-
-# Main content
-st.title("🏠 MasCloner Home")
-st.markdown("**One-way sync from Google Drive to Nextcloud**")
-st.markdown(
-    "Welcome to MasCloner! Monitor your sync status and manage your automated file synchronization."
-)
-
-if not api_connected:
-    st.error("Cannot connect to MasCloner API. Please start the API server.")
-    st.code("cd /srv/mascloner && python -m app.api.main")
-    st.stop()
-
-# System Status Overview
-status = api.get_status()
-if status:
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        scheduler_running = status.get("scheduler_running", False)
-        st.metric(
-            "🔄 Scheduler",
-            "🟢 Running" if scheduler_running else "🔴 Stopped",
-            delta="Active" if scheduler_running else "Inactive",
-        )
-
-    with col2:
-        remotes = status.get("remotes_configured", {})
-        gdrive_ok = remotes.get("gdrive", False)
-        nextcloud_ok = remotes.get("nextcloud", False)
-        both_ok = gdrive_ok and nextcloud_ok
-        st.metric(
-            "🔗 Remotes",
-            "🟢 Connected"
-            if both_ok
-            else "🟡 Partial"
-            if (gdrive_ok or nextcloud_ok)
-            else "🔴 Disconnected",
-            delta=f"GDrive: {'✓' if gdrive_ok else '✗'} | Nextcloud: {'✓' if nextcloud_ok else '✗'}",
-        )
-
-    with col3:
-        last_sync = status.get("last_sync")
-        if last_sync:
-            try:
-                dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
-                last_sync_str = dt.strftime("%m/%d %H:%M")
-                time_ago = datetime.now() - dt.replace(tzinfo=None)
-                if time_ago.days > 0:
-                    delta_str = f"{time_ago.days}d ago"
-                elif time_ago.seconds > 3600:
-                    delta_str = f"{time_ago.seconds // 3600}h ago"
-                else:
-                    delta_str = f"{time_ago.seconds // 60}m ago"
-            except Exception:
-                last_sync_str = "Unknown"
-                delta_str = "Error"
-        else:
-            last_sync_str = "Never"
-            delta_str = "No syncs yet"
-        st.metric("📅 Last Sync", last_sync_str, delta=delta_str)
-
-    with col4:
-        total_runs = status.get("total_runs", 0)
-        config_valid = status.get("config_valid", False)
-        st.metric(
-            "📈 Total Runs",
-            str(total_runs),
-            delta="✓ Config OK" if config_valid else "⚠️ Config Issue",
-        )
-
-st.markdown("---")
-
-# Recent Activity
-st.subheader("📋 Recent Activity")
-
-runs = api.get_runs(limit=5)  # Only show last 5 runs for home page
-if runs and len(runs) > 0:
-    for run in runs:
-        # Create expandable run details
-        run_id = run.get("id", "Unknown")
-        run_status = run.get("status", "unknown")
-        start_time = run.get("started_at", "Unknown")
-
-        # Status icon and color
-        if run_status in ("completed", "success"):
-            status_icon = "✅"
-        elif run_status == "running":
-            status_icon = "🔄"
-        elif run_status == "pending":
-            status_icon = "⏳"
-        elif run_status in ("aborted", "stopped", "cancelled"):
-            status_icon = "⏹️"
-        elif run_status == "skipped":
-            status_icon = "⏭️"
-        elif run_status in ("failed", "error"):
-            status_icon = "❌"
-        else:
-            status_icon = "❓"
-
-        # Format timestamp
-        try:
-            if start_time != "Unknown":
-                dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                time_str = dt.strftime("%m/%d %H:%M:%S")
-            else:
-                time_str = "Unknown time"
-        except Exception:
-            time_str = start_time
-
-        # Run summary
-        files_added = run.get("num_added", 0)
-        files_updated = run.get("num_updated", 0)
-        bytes_transferred = run.get("bytes_transferred", 0)
-        error_count = run.get("errors", 0)
-
-        # Format file size
-        if bytes_transferred > 1024 * 1024:
-            size_str = f"{bytes_transferred / 1024 / 1024:.1f} MB"
-        elif bytes_transferred > 1024:
-            size_str = f"{bytes_transferred / 1024:.1f} KB"
-        else:
-            size_str = f"{bytes_transferred} B"
-
-        with st.expander(
-            f"{status_icon} Run #{run_id} - {time_str} - {run_status.title()}",
-            expanded=False,
-        ):
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Files Added", files_added)
-            with col2:
-                st.metric("Files Updated", files_updated)
-            with col3:
-                st.metric("Data Transferred", size_str)
-            with col4:
-                st.metric("Errors", error_count, delta="⚠️" if error_count > 0 else "✅")
-else:
-    st.info(
-        "🌟 No sync runs yet. Your first automatic sync will start soon, "
-        "or you can trigger one manually below."
-    )
-
-st.markdown("---")
-
-# Quick Actions
-st.subheader("🚀 Quick Actions")
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    if st.button("🔄 Trigger Sync Now", type="primary", use_container_width=True):
-        with st.spinner("Starting sync..."):
-            result = api.trigger_sync()
-            if result and result.get("success"):
-                st.success("✅ Sync triggered successfully!")
-                st.rerun()
-            else:
-                st.error("❌ Failed to trigger sync")
-
-with col2:
-    scheduler_running = status.get("scheduler_running", False) if status else False
-    if scheduler_running:
-        if st.button("⏸️ Pause Scheduler", use_container_width=True):
-            result = api.stop_scheduler()
-            if result and result.get("success"):
-                st.success("✅ Scheduler paused!")
-                st.rerun()
-            else:
-                st.error("❌ Failed to pause scheduler")
-    else:
-        if st.button("▶️ Resume Scheduler", use_container_width=True):
-            result = api.start_scheduler()
-            if result and result.get("success"):
-                st.success("✅ Scheduler resumed!")
-                st.rerun()
-            else:
-                st.error("❌ Failed to resume scheduler")
-
-with col3:
-    if st.button("🔑 Re-auth Google Drive", use_container_width=True):
-        st.switch_page("pages/4_Setup_Wizard.py")
-        # Set session state to trigger re-auth flow
-        st.session_state.gdrive_reauth = True
-
-with col4:
-    if st.button("⚙️ Settings", use_container_width=True):
-        st.switch_page("pages/2_Settings.py")
-
-# Navigation Help
-st.markdown("---")
-
-with st.expander("📖 Navigation Guide"):
-    st.markdown(
-        """
-    **🏠 Home** - System overview and quick actions (this page)
-
-    **⚙️ Settings** - Configure schedules, test connections, and manage system settings
-
-    **📋 History** - View detailed sync run history and file events
-
-    **🔧 Setup Wizard** - Initial configuration for Google Drive and Nextcloud
-
-    **📊 Live Monitor** - Real-time monitoring of running syncs with log streaming and stop control
-    """
-    )
-
-# Footer
-st.markdown("---")
-st.markdown("**MasCloner** - Automated Google Drive to Nextcloud sync")
+pg = st.navigation(pages)
+pg.run()
