@@ -639,12 +639,13 @@ def update_code(
             if layout:
                 layout.add_log("Updated tests/ directory", style="green")
 
-        # Update .env.example if exists (without overwriting .env)
-        env_example_src = temp_dir / ".env.example"
-        if env_example_src.exists():
-            shutil.copy(env_example_src, install_dir / ".env.example")
-            if layout:
-                layout.add_log("Updated .env.example", style="green")
+        # Update requirements.txt, VERSION, and other root configuration files
+        for root_file in ["requirements.txt", "VERSION", ".env.example"]:
+            src_file = temp_dir / root_file
+            if src_file.exists():
+                shutil.copy(src_file, install_dir / root_file)
+                if layout:
+                    layout.add_log(f"Updated {root_file}", style="green")
 
         # Set ownership
         run_command(
@@ -668,6 +669,7 @@ def update_dependencies(
 ) -> bool:
     """Update Python dependencies."""
     venv_pip = install_dir / ".venv" / "bin" / "pip"
+    venv_python = install_dir / ".venv" / "bin" / "python"
     requirements = install_dir / "requirements.txt"
 
     if not requirements.exists():
@@ -676,8 +678,15 @@ def update_dependencies(
         return True
 
     try:
-        exit_code, _, _ = run_command(
-            ["sudo", "-u", user, str(venv_pip), "install", "-r", str(requirements)],
+        # Check if uv is available on host for faster, robust resolution, fallback to pip
+        uv_bin = shutil.which("uv")
+        if uv_bin:
+            cmd = ["sudo", "-u", user, uv_bin, "pip", "install", "--python", str(venv_python), "-r", str(requirements)]
+        else:
+            cmd = ["sudo", "-u", user, str(venv_pip), "install", "-r", str(requirements)]
+
+        exit_code, _, stderr = run_command(
+            cmd,
             check=False,
             capture=True,
         )
