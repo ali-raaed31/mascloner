@@ -8,6 +8,11 @@
 INSTALL_DIR="${INSTALL_DIR:-/srv/mascloner}"
 VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
 
+if [[ "${1:-}" == "update" && $EUID -ne 0 ]]; then
+    exec sudo -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin \
+        INSTALL_DIR=/srv/mascloner /usr/local/bin/mascloner "$@"
+fi
+
 # Colors for fallback messages
 RED='\033[0;31m'
 YELLOW='\033[1;33m'

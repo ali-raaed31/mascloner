@@ -245,15 +245,17 @@ An installation at `7f22b48` must first use the checksum-verified one-time
 bridge in [the v3.2.0 upgrade guide](docs/releases/v3.2.0.md). Do not run its
 installed `mascloner update` command for that first upgrade.
 
-For v3.2.0 and later, supply a qualified release archive and its published
-SHA-256 to the verified CLI updater. The installed `update.sh` forwards to the
-same CLI transaction and has no separate clone-based update path.
+With v3.2.4 or later installed, update with one command. The updater fetches
+the latest published release and its digest automatically.
 
 ```bash
-sudo env MASCLONER_RELEASE_ARCHIVE=/path/to/release.tar.gz \
-  MASCLONER_RELEASE_SHA256=REPLACE_WITH_PUBLISHED_SHA256 \
-  mascloner update --yes
+mascloner update
 ```
+
+For an offline update, pass the archive and published digest to the root
+process with `sudo env MASCLONER_RELEASE_ARCHIVE=... MASCLONER_RELEASE_SHA256=... mascloner update`.
+`MASCLONER_RELEASE_DIR` is also available for a prepared local release
+directory.
 
 ### Accepted Architecture Migration
 

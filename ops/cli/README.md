@@ -39,21 +39,21 @@ A beautiful, feature-rich command-line interface for managing MasCloner, built w
 ### Update MasCloner
 
 ```bash
-release_archive=/path/to/qualified-release.tar.gz
-release_sha256=REPLACE_WITH_PUBLISHED_SHA256
-
-# Validate the release and installed Python without changing the installation
-sudo env MASCLONER_RELEASE_ARCHIVE="$release_archive" \
-  MASCLONER_RELEASE_SHA256="$release_sha256" mascloner update --check-only
-
-# Install the complete release with a verified recovery bundle
-sudo env MASCLONER_RELEASE_ARCHIVE="$release_archive" \
-  MASCLONER_RELEASE_SHA256="$release_sha256" mascloner update --yes
+mascloner update
 ```
 
-The `--skip-backup`, `--services-only`, and `--deps-only` flags are rejected for
-verified updates. An installation still at `7f22b48` needs the one-time bridge
-in [the v3.2.2 upgrade guide](../../docs/releases/v3.2.2.md) first.
+The v3.2.4 and later updater fetches the latest published release and its
+digest automatically.
+For an offline update, pass the archive and digest to the root process:
+
+```bash
+sudo env MASCLONER_RELEASE_ARCHIVE=/path/to/release.tar.gz \
+  MASCLONER_RELEASE_SHA256=PUBLISHED_SHA256 mascloner update
+```
+
+`MASCLONER_RELEASE_DIR` is also available for a prepared local release
+directory. An installation still at `7f22b48` needs the one-time
+bridge in [the v3.2.2 upgrade guide](../../docs/releases/v3.2.2.md) first.
 
 ### Check Status
 
@@ -175,10 +175,9 @@ Installation: /srv/mascloner
 ## Fallback Mode
 
 If the modern CLI is missing, the wrapper can still run the legacy status
-check. Updates fail without changing files and direct the operator to the
-verified bridge:
+check. Updates direct the operator to the bridge:
 
-- `mascloner update` → `ops/scripts/update.sh` → fails safely without the CLI
+- `mascloner update` → `ops/scripts/update.sh` → requires the v3.2 CLI
 - `mascloner status` → `ops/scripts/health-check.sh`
 
 ## Development

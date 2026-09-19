@@ -1,14 +1,17 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 3.2.3
+# Version: 3.2.4
 # Last Updated: 2026-09-19
 
+import json
 import os
+import re
 import shutil
 import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.error import HTTPError, URLError
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 import typer
 from ops.cli.ui.layout import UpdateLayout
@@ -37,8 +40,74 @@ from ops.cli.transaction import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "3.2.3"
+UPDATE_CMD_VERSION = "3.2.4"
 UPDATE_CMD_DATE = "2026-09-19"
+
+GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/ali-raaed31/mascloner/releases/latest"
+MAX_RELEASE_ARCHIVE_BYTES = 512 * 1024 * 1024
+
+
+def _download_latest_release_archive(destination: Path) -> Tuple[Path, str]:
+    """Download the exact archive advertised by GitHub's latest release."""
+    metadata_request = Request(
+        GITHUB_LATEST_RELEASE_URL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "MasCloner updater"},
+    )
+    try:
+        with urlopen(metadata_request, timeout=20) as response:
+            release = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise UpdateTransactionError(f"could not fetch the latest MasCloner release from GitHub: {exc}") from exc
+
+    tag = release.get("tag_name") if isinstance(release, dict) else None
+    if not isinstance(tag, str) or re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
+        raise UpdateTransactionError("GitHub's latest MasCloner release has an invalid release tag")
+    version = tag[1:]
+    archive_name = f"mascloner-{version}.tar.gz"
+    assets = release.get("assets")
+    matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == archive_name] if isinstance(assets, list) else []
+    if len(matches) != 1:
+        raise UpdateTransactionError(
+            f"GitHub release {tag} must contain exactly one verified {archive_name} archive"
+        )
+    asset = matches[0]
+    digest = asset.get("digest")
+    digest_match = re.fullmatch(r"sha256:([0-9a-fA-F]{64})", digest) if isinstance(digest, str) else None
+    if digest_match is None:
+        raise UpdateTransactionError(f"GitHub release {tag} does not publish a SHA-256 digest for {archive_name}")
+    download_url = asset.get("browser_download_url")
+    expected_url = f"https://github.com/ali-raaed31/mascloner/releases/download/{tag}/{archive_name}"
+    if download_url != expected_url:
+        raise UpdateTransactionError(f"GitHub release {tag} has an invalid download URL for {archive_name}")
+    asset_size = asset.get("size")
+    if not isinstance(asset_size, int) or asset_size <= 0 or asset_size > MAX_RELEASE_ARCHIVE_BYTES:
+        raise UpdateTransactionError(f"GitHub release {tag} has an invalid archive size for {archive_name}")
+
+    archive_path = destination / archive_name
+    try:
+        download_request = Request(download_url, headers={"User-Agent": "MasCloner updater"})
+        received = 0
+        with urlopen(download_request, timeout=120) as response, archive_path.open("xb") as output:
+            for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                received += len(chunk)
+                if received > asset_size or received > MAX_RELEASE_ARCHIVE_BYTES:
+                    raise UpdateTransactionError(f"downloaded {archive_name} exceeds its published size")
+                output.write(chunk)
+        if received != asset_size:
+            raise UpdateTransactionError(f"downloaded {archive_name} does not match its published size")
+    except (HTTPError, URLError, OSError) as exc:
+        raise UpdateTransactionError(f"could not download {archive_name} from GitHub: {exc}") from exc
+    return archive_path, digest_match.group(1).lower()
+
+
+def _is_newer_release_version(installed: str, candidate: str) -> bool:
+    """Compare stable release versions without adding an updater dependency."""
+    pattern = r"v?(\d+)\.(\d+)\.(\d+)"
+    installed_match = re.fullmatch(pattern, installed.strip())
+    candidate_match = re.fullmatch(pattern, candidate.strip())
+    if installed_match is None or candidate_match is None:
+        return False
+    return tuple(map(int, installed_match.groups())) > tuple(map(int, candidate_match.groups()))
 
 
 def main(
@@ -84,84 +153,92 @@ def main(
         show_error(f"Installation not found at {install_dir}")
         raise typer.Exit(1)
 
-    # v3.2 update sources are immutable release payloads.  Deliberately do
-    # not fall back to a mutable default branch: that was the source of the
-    # 3.1 dependency/code mismatch.
+    # Local sources remain available for offline recovery.  The ordinary path
+    # obtains the immutable archive and published digest from GitHub.
     release_dir = os.environ.get("MASCLONER_RELEASE_DIR")
     release_archive = os.environ.get("MASCLONER_RELEASE_ARCHIVE")
     release_sha256 = os.environ.get("MASCLONER_RELEASE_SHA256")
-    if release_dir or release_archive:
-        try:
-            unsupported_modes = [
-                flag
-                for enabled, flag in (
-                    (skip_backup, "--skip-backup"),
-                    (services_only, "--services-only"),
-                    (deps_only, "--deps-only"),
-                )
-                if enabled
-            ]
-            if unsupported_modes:
-                raise UpdateTransactionError(
-                    ", ".join(unsupported_modes)
-                    + " cannot be used with verified v3.2 updates; run the complete transaction or use --check-only"
-                )
-            def install(source: Path) -> dict:
-                if check_only or dry_run:
-                    manifest = validate_release(source)
-                    check_python_version(install_dir / ".venv" / "bin" / "python")
-                    installed_revision = (install_dir / ".commit_hash").read_text(encoding="utf-8").strip()
-                    state = "already current" if installed_revision == manifest["revision"] else "update available"
-                    show_info(
-                        f"Verified release {manifest['version']} ({manifest['revision'][:12]}): {state}. "
-                        "No files or services were changed."
-                    )
-                    return {"source": {"version": manifest["version"], "revision": manifest["revision"]}, "state": state}
-                return run_update_transaction(
-                    source,
-                    install_dir,
-                    backup_dir,
-                    install_dependencies=lambda root: update_dependencies(root, mascloner_user),
-                    run_migrations=lambda root: run_migrations(root, mascloner_user),
-                    install_services=update_systemd_services,
-                    stop_services=lambda: _services_stopped(stop_all_services()),
-                    start_services=lambda: _services_started(start_all_services()),
-                    health_check=lambda: all(ok for _, ok, _ in run_health_checks()),
-                    rollback_services_dir=Path(os.environ.get("MASCLONER_SYSTEMD_DIR", "/etc/systemd/system")),
-                    owner=mascloner_user,
-                )
+    try:
+        unsupported_modes = [
+            flag
+            for enabled, flag in (
+                (skip_backup, "--skip-backup"),
+                (services_only, "--services-only"),
+                (deps_only, "--deps-only"),
+            )
+            if enabled
+        ]
+        if unsupported_modes:
+            raise UpdateTransactionError(
+                ", ".join(unsupported_modes)
+                + " cannot be used with verified v3.2 updates; run the complete transaction or use --check-only"
+            )
 
+        def install(source: Path) -> dict:
+            manifest = validate_release(source)
+            revision_file = install_dir / ".commit_hash"
+            installed_revision = revision_file.read_text(encoding="utf-8").strip() if revision_file.is_file() else ""
+            version_file = install_dir / "VERSION"
+            installed_version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+            if _is_newer_release_version(installed_version, manifest["version"]):
+                raise UpdateTransactionError(
+                    f"installed MasCloner {installed_version} is newer than requested release "
+                    f"{manifest['version']}; refusing to downgrade"
+                )
+            state = (
+                "already current"
+                if installed_revision == manifest["revision"] and installed_version == manifest["version"]
+                else "update available"
+            )
+            if state == "already current" or check_only or dry_run:
+                if state != "already current":
+                    check_python_version(install_dir / ".venv" / "bin" / "python")
+                show_info(
+                    f"Verified release {manifest['version']} ({manifest['revision'][:12]}): {state}. "
+                    "No files or services were changed."
+                )
+                return {"source": {"version": manifest["version"], "revision": manifest["revision"]}, "state": state}
+            return run_update_transaction(
+                source,
+                install_dir,
+                backup_dir,
+                install_dependencies=lambda root: update_dependencies(root, mascloner_user),
+                run_migrations=lambda root: run_migrations(root, mascloner_user),
+                install_services=update_systemd_services,
+                stop_services=lambda: _services_stopped(stop_all_services()),
+                start_services=lambda: _services_started(start_all_services()),
+                health_check=lambda: all(ok for _, ok, _ in run_health_checks()),
+                rollback_services_dir=Path(os.environ.get("MASCLONER_SYSTEMD_DIR", "/etc/systemd/system")),
+                owner=mascloner_user,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="mascloner-release-") as temporary:
+            temporary_path = Path(temporary)
             if release_archive:
                 if not release_sha256:
                     raise UpdateTransactionError("MASCLONER_RELEASE_SHA256 is required with MASCLONER_RELEASE_ARCHIVE")
-                with tempfile.TemporaryDirectory(prefix="mascloner-release-") as temporary:
-                    source_dir = extract_verified_release(Path(release_archive), release_sha256, Path(temporary))
-                    transaction = install(source_dir)
-            else:
+                source_dir = extract_verified_release(Path(release_archive), release_sha256, temporary_path)
+            elif release_dir:
                 # The directory form is only appropriate for a local/offline
                 # artifact; RELEASE.json still verifies every payload file.
-                assert release_dir is not None
-                transaction = install(Path(release_dir))
-        except UpdateTransactionError as exc:
-            show_error(str(exc))
-            raise typer.Exit(1)
-        if transaction["state"] == "completed":
-            show_success(
-                f"Installed verified release {transaction['source']['version']} "
-                f"({transaction['source']['revision'][:12]})"
-            )
-        else:
-            show_info(
-                f"Verified release {transaction['source']['version']} "
-                f"({transaction['source']['revision'][:12]}): {transaction['state']}"
-            )
-        return
-    show_error(
-        "No immutable release source configured. Set MASCLONER_RELEASE_ARCHIVE and "
-        "MASCLONER_RELEASE_SHA256, or MASCLONER_RELEASE_DIR for a local verified payload. "
-        "Check-only and dry-run also require that immutable source."
-    )
-    raise typer.Exit(1)
+                source_dir = Path(release_dir)
+            else:
+                archive_path, archive_sha256 = _download_latest_release_archive(temporary_path)
+                source_dir = extract_verified_release(archive_path, archive_sha256, temporary_path)
+            transaction = install(source_dir)
+    except UpdateTransactionError as exc:
+        show_error(str(exc))
+        raise typer.Exit(1)
+    if transaction["state"] == "completed":
+        show_success(
+            f"Installed verified release {transaction['source']['version']} "
+            f"({transaction['source']['revision'][:12]})"
+        )
+    else:
+        show_info(
+            f"Verified release {transaction['source']['version']} "
+            f"({transaction['source']['revision'][:12]}): {transaction['state']}"
+        )
 
 def stop_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, str, str]]:
     """Stop all MasCloner services."""

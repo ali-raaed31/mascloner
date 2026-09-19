@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import pwd
 import sqlite3
@@ -411,6 +412,147 @@ def test_normal_cli_update_uses_the_verified_release_transaction(tmp_path: Path,
     result = CliRunner().invoke(cli_app, ["update", "--yes"])
     assert result.exit_code == 0, result.output
     assert observed == [("3.0.0\n", "streamlit==1.63.0\n")]
+
+
+def test_default_cli_update_fetches_and_installs_the_latest_verified_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install = _installation(tmp_path / "install")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    archive = tmp_path / "mascloner-3.2.3.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(release, arcname="mascloner-release")
+    observed: list[dict[str, object]] = []
+
+    def download(destination: Path) -> tuple[Path, str]:
+        downloaded = destination / archive.name
+        shutil.copy2(archive, downloaded)
+        return downloaded, sha256_file(archive)
+
+    monkeypatch.setenv("INSTALL_DIR", str(install))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.delenv("MASCLONER_RELEASE_DIR", raising=False)
+    monkeypatch.delenv("MASCLONER_RELEASE_ARCHIVE", raising=False)
+    monkeypatch.delenv("MASCLONER_RELEASE_SHA256", raising=False)
+    monkeypatch.setattr(update_command, "require_root", lambda: None)
+    monkeypatch.setattr(update_command, "_download_latest_release_archive", download)
+    monkeypatch.setattr(
+        update_command,
+        "run_update_transaction",
+        lambda source, *_args, **_kwargs: observed.append(validate_release(source)) or {
+            "source": {"version": "3.2.3", "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            "state": "completed",
+        },
+    )
+
+    result = CliRunner().invoke(cli_app, ["update", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert observed == [validate_release(release)]
+
+
+def test_latest_release_download_requires_the_exact_github_asset_and_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive_bytes = b"release archive"
+    digest = "a" * 64
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+    metadata = {
+        "tag_name": "v3.2.3",
+        "assets": [
+            {
+                "name": "mascloner-3.2.3.tar.gz",
+                "digest": f"sha256:{digest}",
+                "size": len(archive_bytes),
+                "browser_download_url": "https://github.com/ali-raaed31/mascloner/releases/download/v3.2.3/mascloner-3.2.3.tar.gz",
+            }
+        ],
+    }
+    requests: list[str] = []
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        requests.append(request.full_url)  # type: ignore[attr-defined]
+        return Response(json.dumps(metadata).encode("utf-8") if len(requests) == 1 else archive_bytes)
+
+    monkeypatch.setattr(update_command, "urlopen", fake_urlopen)
+    archive, received_digest = update_command._download_latest_release_archive(tmp_path)
+
+    assert archive.read_bytes() == archive_bytes
+    assert received_digest == digest
+    assert requests == [
+        update_command.GITHUB_LATEST_RELEASE_URL,
+        "https://github.com/ali-raaed31/mascloner/releases/download/v3.2.3/mascloner-3.2.3.tar.gz",
+    ]
+
+
+@pytest.mark.parametrize("invalid_field", ("digest", "browser_download_url"))
+def test_latest_release_rejects_unverified_asset_before_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_field: str,
+) -> None:
+    asset = {
+        "name": "mascloner-3.2.3.tar.gz",
+        "digest": "sha256:" + "a" * 64,
+        "size": 10,
+        "browser_download_url": "https://github.com/ali-raaed31/mascloner/releases/download/v3.2.3/mascloner-3.2.3.tar.gz",
+    }
+    asset[invalid_field] = "https://example.invalid/archive" if invalid_field == "browser_download_url" else ""
+    metadata = json.dumps({"tag_name": "v3.2.3", "assets": [asset]}).encode("utf-8")
+    requests: list[str] = []
+
+    def fake_urlopen(request: object, timeout: int) -> io.BytesIO:
+        requests.append(request.full_url)  # type: ignore[attr-defined]
+        return io.BytesIO(metadata)
+
+    monkeypatch.setattr(update_command, "urlopen", fake_urlopen)
+    with pytest.raises(UpdateTransactionError):
+        update_command._download_latest_release_archive(tmp_path)
+    assert requests == [update_command.GITHUB_LATEST_RELEASE_URL]
+
+
+def test_cli_update_refuses_to_downgrade_before_creating_a_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install = _installation(tmp_path / "install")
+    _write(install / "VERSION", "3.2.4\n")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    monkeypatch.setenv("INSTALL_DIR", str(install))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("MASCLONER_RELEASE_DIR", str(release))
+    monkeypatch.setattr(update_command, "require_root", lambda: None)
+    monkeypatch.setattr(
+        update_command,
+        "run_update_transaction",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not create a backup")),
+    )
+
+    result = CliRunner().invoke(cli_app, ["update", "--yes"])
+
+    assert result.exit_code == 1
+    assert "newer than requested release" in result.output
+
+
+def test_cli_update_skips_recovery_bundle_when_same_release_is_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    install = _installation(tmp_path / "install", revision=revision)
+    _write(install / "VERSION", "3.2.3\n")
+    release = _release(tmp_path / "release", revision=revision)
+    _release_manifest(release, revision)
+    monkeypatch.setenv("INSTALL_DIR", str(install))
+    monkeypatch.setenv("MASCLONER_RELEASE_DIR", str(release))
+    monkeypatch.setattr(update_command, "require_root", lambda: None)
+    monkeypatch.setattr(
+        update_command,
+        "run_update_transaction",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not create a backup")),
+    )
+
+    result = CliRunner().invoke(cli_app, ["update"])
+
+    assert result.exit_code == 0, result.output
+    assert "already current" in result.output
 
 
 def test_standalone_bridge_upgrades_7f_shaped_fixture_from_checked_archive(tmp_path: Path) -> None:
