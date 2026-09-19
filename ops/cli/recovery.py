@@ -193,7 +193,7 @@ def create_recovery_bundle(
                 _copy_path(source, payload / relative)
         _online_sqlite_backup(install_dir / "data" / "mascloner.db", payload / "data" / "mascloner.db")
         for item in (install_dir / "data").iterdir():
-            if item.name in {"mascloner.db", "mascloner.db-wal", "mascloner.db-shm"}:
+            if item.name in {"mascloner.db", "mascloner.db-wal", "mascloner.db-shm", "mascloner.db-journal"}:
                 continue
             _copy_path(item, payload / "data" / item.name)
 
