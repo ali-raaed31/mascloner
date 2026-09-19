@@ -1,3 +1,3 @@
 """MasCloner CLI - Modern command-line interface with Rich UI."""
 
-__version__ = "3.2.2"
+__version__ = "3.2.3"
