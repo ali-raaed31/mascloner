@@ -8,11 +8,164 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple, TypeVar
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 logger = logging.getLogger(__name__)
+
+ContractModel = TypeVar("ContractModel", bound=BaseModel)
+
+
+class APIActionResult(BaseModel):
+    """Outcome returned by an API operation that changes durable state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+
+class ScheduleSettingsContract(BaseModel):
+    """Canonical schedule response consumed by Streamlit pages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    interval_min: int
+    jitter_sec: int
+    interval: str
+    next_run_time: Optional[str] = None
+
+
+class ScheduleUpdateContract(BaseModel):
+    """Canonical payload accepted by ``POST /schedule``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    interval_min: int
+    jitter_sec: int
+
+
+class RclonePerformanceContract(BaseModel):
+    """Canonical rclone performance representation used for GET and POST."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transfers: int
+    checkers: int
+    tpslimit: int
+    tpslimit_burst: int
+    buffer_size: Optional[str] = None
+    drive_chunk_size: Optional[str] = None
+    drive_upload_cutoff: Optional[str] = None
+    fast_list: bool
+
+
+class RunContract(BaseModel):
+    """Canonical terminal run shape returned by ``GET /runs``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    status: str
+    started_at: str
+    finished_at: Optional[str] = None
+    num_added: int
+    num_updated: int
+    bytes_transferred: int
+    errors: int
+    log_path: Optional[str] = None
+    message: Optional[str] = None
+
+    @property
+    def mutation_count(self) -> int:
+        """Return the number of files added or updated by this run."""
+        return self.num_added + self.num_updated
+
+    @property
+    def duration_seconds(self) -> Optional[float]:
+        """Calculate terminal duration from the canonical timestamps."""
+        if not self.finished_at:
+            return None
+        try:
+            started = datetime.fromisoformat(self.started_at.replace("Z", "+00:00"))
+            finished = datetime.fromisoformat(self.finished_at.replace("Z", "+00:00"))
+            return max(0.0, (finished - started).total_seconds())
+        except ValueError:
+            return None
+
+
+class CurrentRunContract(BaseModel):
+    """Canonical live-run shape returned by ``GET /runs/current``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    status: str
+    started_at: str
+    num_added: int
+    num_updated: int
+    bytes_transferred: int
+    errors: int
+    log_path: Optional[str] = None
+    is_process_running: bool
+    percentage: Optional[float] = None
+    speed_bps: Optional[float] = None
+    recent_events: Optional[list[Dict[str, Any]]] = None
+
+    @property
+    def mutation_count(self) -> int:
+        """Return transfers reported by the current sync snapshot."""
+        return self.num_added + self.num_updated
+
+    @property
+    def elapsed_seconds(self) -> Optional[float]:
+        """Calculate elapsed time from the canonical live-run start timestamp."""
+        try:
+            started = datetime.fromisoformat(self.started_at.replace("Z", "+00:00"))
+            return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+        except ValueError:
+            return None
+
+
+class EndpointStatusContract(BaseModel):
+    """Secret-free durable endpoint status used by connection cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    configured: bool
+    remote_name: Optional[str] = None
+    scope: Optional[str] = None
+    folders: Optional[list[str]] = None
+    last_test: Optional[str] = None
+    url: Optional[str] = None
+    user: Optional[str] = None
+    vendor: Optional[str] = None
+
+
+class SyncRouteSideContract(BaseModel):
+    """Verification outcome for one configured route side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remote_ok: bool
+    path_ok: bool
+    message: str
+
+
+class SyncRouteVerificationContract(BaseModel):
+    """Secret-free verification result for the persisted SyncRoute."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    source: SyncRouteSideContract
+    destination: SyncRouteSideContract
 
 
 class APIClient:
@@ -51,9 +204,23 @@ class APIClient:
         """Clear authentication credentials."""
         self._auth = None
 
-    def _make_request(
-        self, method: str, endpoint: str, **kwargs
-    ) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _error_message(response: httpx.Response) -> str:
+        """Extract FastAPI's useful validation detail without exposing response internals."""
+        try:
+            detail = response.json().get("detail")
+            if isinstance(detail, str):
+                return detail
+            if isinstance(detail, list):
+                return "; ".join(
+                    str(item.get("msg", item)) if isinstance(item, dict) else str(item)
+                    for item in detail
+                )
+        except ValueError:
+            pass
+        return response.text or f"API error: {response.status_code}"
+
+    def _make_request(self, method: str, endpoint: str, **kwargs: Any) -> Optional[Any]:
         """Make HTTP request to API."""
         try:
             with httpx.Client(timeout=self.timeout, auth=self._auth) as client:
@@ -61,17 +228,44 @@ class APIClient:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as e:
+            message = self._error_message(e.response)
             if e.response.status_code == 401:
                 logger.warning("API authentication failed: Invalid credentials")
             else:
-                logger.error("API HTTP error: %s %s", e.response.status_code, e.response.text)
-            return None
+                logger.error("API HTTP error: %s %s", e.response.status_code, message)
+            return {"success": False, "message": message}
         except httpx.RequestError as e:
             logger.error("API request failed: %s", e)
-            return None
+            return {"success": False, "message": f"Connection error: {e}"}
         except Exception as e:
             logger.error("Unexpected API error: %s", e)
+            return {"success": False, "message": f"Unexpected API error: {e}"}
+
+    @staticmethod
+    def _parse_contract(
+        model: type[ContractModel], payload: Any, endpoint: str
+    ) -> Optional[ContractModel]:
+        """Validate a successful response at the UI boundary."""
+        if not isinstance(payload, dict):
             return None
+        try:
+            return model.model_validate(payload)
+        except ValidationError as exc:
+            logger.error("Invalid %s response: %s", endpoint, exc)
+            return None
+
+    @staticmethod
+    def _parse_action(payload: Any) -> APIActionResult:
+        """Convert success and non-2xx API responses into one page-friendly result."""
+        if not isinstance(payload, dict):
+            return APIActionResult(success=False, message="The API returned no response")
+        try:
+            return APIActionResult.model_validate(payload)
+        except ValidationError:
+            return APIActionResult(
+                success=False,
+                message=str(payload.get("message", "The API returned an invalid response")),
+            )
 
     def check_auth(self) -> Tuple[bool, str]:
         """Check if authentication is working.
@@ -120,9 +314,21 @@ class APIClient:
         """Get sync schedule."""
         return self._make_request("GET", "/schedule")
 
+    def get_schedule_settings(self) -> Optional[ScheduleSettingsContract]:
+        """Get the canonical schedule contract for UI pages."""
+        return self._parse_contract(
+            ScheduleSettingsContract, self.get_schedule(), "/schedule"
+        )
+
     def update_schedule(self, schedule: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update sync schedule."""
         return self._make_request("POST", "/schedule", json=schedule)
+
+    def save_schedule(self, settings: ScheduleUpdateContract) -> APIActionResult:
+        """Persist a validated schedule payload and retain validation feedback."""
+        return self._parse_action(
+            self.update_schedule(settings.model_dump())
+        )
 
     def start_scheduler(self) -> Optional[Dict[str, Any]]:
         """Start the scheduler."""
@@ -132,6 +338,11 @@ class APIClient:
         """Stop the scheduler."""
         return self._make_request("POST", "/schedule/stop")
 
+    def set_schedule_paused(self, paused: bool) -> APIActionResult:
+        """Pause or resume the durable scheduler through one page-level operation."""
+        response = self.stop_scheduler() if paused else self.start_scheduler()
+        return self._parse_action(response)
+
     def get_runs(
         self, limit: int = 50, status: Optional[str] = None
     ) -> Optional[Any]:
@@ -140,6 +351,19 @@ class APIClient:
         if status:
             params["status"] = status
         return self._make_request("GET", "/runs", params=params)
+
+    def get_recent_runs(
+        self, limit: int = 50, status: Optional[str] = None
+    ) -> Optional[list[RunContract]]:
+        """Get canonical run records from the list-shaped runs response."""
+        response = self.get_runs(limit=limit, status=status)
+        if not isinstance(response, list):
+            return None
+        try:
+            return [RunContract.model_validate(run) for run in response]
+        except ValidationError as exc:
+            logger.error("Invalid /runs response: %s", exc)
+            return None
 
     def trigger_sync(self) -> Optional[Dict[str, Any]]:
         """Trigger manual sync."""
@@ -284,6 +508,14 @@ class APIClient:
         """Get Google Drive configuration status."""
         return self._make_request("GET", "/oauth/google-drive/status")
 
+    def get_google_drive_endpoint_status(self) -> Optional[EndpointStatusContract]:
+        """Get the canonical, secret-free Google Drive configuration status."""
+        return self._parse_contract(
+            EndpointStatusContract,
+            self.get_google_drive_status(),
+            "/oauth/google-drive/status",
+        )
+
     def get_gdrive_status(self) -> Optional[Dict[str, Any]]:
         """Get Google Drive configuration status (backward-compatible alias)."""
         return self.get_google_drive_status()
@@ -299,6 +531,14 @@ class APIClient:
     def get_nextcloud_status(self) -> Optional[Dict[str, Any]]:
         """Get Nextcloud destination configuration status."""
         return self._make_request("GET", "/test/nextcloud/status")
+
+    def get_nextcloud_endpoint_status(self) -> Optional[EndpointStatusContract]:
+        """Get the canonical, secret-free Nextcloud configuration status."""
+        return self._parse_contract(
+            EndpointStatusContract,
+            self.get_nextcloud_status(),
+            "/test/nextcloud/status",
+        )
 
     def remove_nextcloud_config(self) -> Optional[Dict[str, Any]]:
         """Remove Nextcloud configuration."""
@@ -321,9 +561,23 @@ class APIClient:
         """Get current rclone performance configuration."""
         return self._make_request("GET", "/rclone/config")
 
+    def get_rclone_performance(self) -> Optional[RclonePerformanceContract]:
+        """Get the canonical rclone performance contract for UI pages."""
+        return self._parse_contract(
+            RclonePerformanceContract, self.get_rclone_config(), "/rclone/config"
+        )
+
     def update_rclone_config(self, settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update rclone performance configuration."""
         return self._make_request("POST", "/rclone/config", json=settings)
+
+    def save_rclone_performance(
+        self, settings: RclonePerformanceContract
+    ) -> APIActionResult:
+        """Persist a complete validated rclone performance payload."""
+        return self._parse_action(
+            self.update_rclone_config(settings.model_dump())
+        )
 
     # Live sync monitoring
     def get_current_run(self) -> Optional[Dict[str, Any]]:
@@ -333,6 +587,12 @@ class APIClient:
             Run information dict or None if no sync is running
         """
         return self._make_request("GET", "/runs/current")
+
+    def get_current_run_snapshot(self) -> Optional[CurrentRunContract]:
+        """Get a validated active-run snapshot, or ``None`` when the engine is idle."""
+        return self._parse_contract(
+            CurrentRunContract, self.get_current_run(), "/runs/current"
+        )
 
     def get_run_logs(
         self, run_id: int, since: int = 0, limit: int = 100
@@ -371,3 +631,11 @@ class APIClient:
     def update_sync_paths(self, paths: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update sync folder paths."""
         return self._make_request("POST", "/config/paths", json=paths)
+
+    def verify_sync_route(self) -> Optional[SyncRouteVerificationContract]:
+        """Probe the persisted source and destination paths without exposing secrets."""
+        return self._parse_contract(
+            SyncRouteVerificationContract,
+            self._make_request("POST", "/config/paths/verify"),
+            "/config/paths/verify",
+        )

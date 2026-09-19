@@ -40,18 +40,19 @@ def main() -> int:
         backup_root=args.backup_dir,
     )
 
-    if args.rollback:
-        logger.info("Starting rollback from recovery bundle: %s", args.rollback)
-        report = service.rollback(args.rollback)
-    elif args.check:
+    if args.rollback or args.apply:
+        logger.error(
+            "Use 'mascloner migrate --apply' or '--rollback' for mutable cutover operations; "
+            "the CLI stops and confirms services before changing SQLite or configuration files."
+        )
+        return 1
+
+    if args.check:
         logger.info("Executing migration preflight checks")
         report = service.run_migration(mode=MigrationMode.CHECK)
     elif args.dry_run:
         logger.info("Simulating migration in dry-run mode (0 mutations)")
         report = service.run_migration(mode=MigrationMode.DRY_RUN)
-    elif args.apply:
-        logger.info("Applying backup-first migration and cutover")
-        report = service.run_migration(mode=MigrationMode.APPLY)
     else:
         logger.error("No valid mode selected")
         return 1

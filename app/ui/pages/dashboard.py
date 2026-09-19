@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import streamlit as st
 
 try:
@@ -11,7 +10,6 @@ try:
         format_bytes,
         format_duration,
         format_iso_time,
-        get_status_badge_meta,
         render_hero_bar,
         render_status_pill,
     )
@@ -21,7 +19,6 @@ except ImportError:
         format_bytes,
         format_duration,
         format_iso_time,
-        get_status_badge_meta,
         render_hero_bar,
         render_status_pill,
     )
@@ -37,15 +34,15 @@ api = get_api()
 st.title("⚡ Live Dashboard")
 render_hero_bar(api)
 
-current_run = api.get_current_run()
-schedule = api.get_schedule() or {}
+current_run = api.get_current_run_snapshot()
+schedule = api.get_schedule_settings()
 is_running = bool(current_run)
-sched_enabled = schedule.get("enabled", False)
+sched_enabled = schedule.enabled if schedule else False
 
 # 2. In-Progress Alert Banner (if running)
-if is_running:
-    run_id = current_run.get("id")
-    started_at = current_run.get("started_at")
+if current_run is not None:
+    run_id = current_run.id
+    started_at = current_run.started_at
     col_msg, col_btn = st.columns([3, 1])
     with col_msg:
         st.info(f"🔄 **Sync Run #{run_id} is currently executing** (started {format_iso_time(started_at)})")
@@ -82,9 +79,9 @@ with ctrl_col2:
         use_container_width=True,
     ):
         if current_run:
-            stop_resp = api.stop_run(current_run["id"])
+            stop_resp = api.stop_run(current_run.id)
             if stop_resp and stop_resp.get("success"):
-                st.warning(f"Stop signal sent to Run #{current_run['id']}.")
+                st.warning(f"Stop signal sent to Run #{current_run.id}.")
             else:
                 st.error("Failed to signal stop.")
             st.rerun()
@@ -96,22 +93,33 @@ with ctrl_col3:
             help="Temporarily disable automated interval syncs",
             use_container_width=True,
         ):
-            api.stop_schedule()
-            st.toast("Automated schedule paused.", icon="⏸️")
-            st.rerun()
+            result = api.set_schedule_paused(True)
+            if result.success:
+                st.toast(result.message, icon="⏸️")
+                st.rerun()
+            else:
+                st.error(f"Unable to pause schedule: {result.message}")
     else:
         if st.button(
             "▶️ Resume Schedule",
             help="Enable automated interval syncs",
             use_container_width=True,
         ):
-            api.start_schedule()
-            st.toast("Automated schedule resumed.", icon="▶️")
-            st.rerun()
+            result = api.set_schedule_paused(False)
+            if result.success:
+                st.toast(result.message, icon="▶️")
+                st.rerun()
+            else:
+                st.error(f"Unable to resume schedule: {result.message}")
 
 st.divider()
 
 # 4. Active Sync Route & Endpoint Verification Card
+paths = api.get_sync_paths() or {}
+gdrive_src = paths.get("gdrive_src") or ""
+nc_dest_path = paths.get("nc_dest_path") or ""
+current_route_paths = {"gdrive_src": gdrive_src, "nc_dest_path": nc_dest_path}
+
 route_col_header, route_col_action = st.columns([3, 1])
 with route_col_header:
     st.subheader("🔄 Active Sync Route")
@@ -120,38 +128,40 @@ with route_col_header:
 with route_col_action:
     if st.button("⚡ Verify Endpoints", help="Probe both Google Drive and Nextcloud WebDAV to verify paths exist and are accessible", use_container_width=True):
         with st.spinner("Probing Google Drive & Nextcloud...", show_time=True):
-            gdrive_res = api.test_google_drive_connection() or {}
-            nc_res = api.test_nextcloud() or {}
-            st.session_state.route_verification = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "gdrive_ok": gdrive_res.get("success", False),
-                "gdrive_msg": gdrive_res.get("message", "Unknown status"),
-                "nc_ok": nc_res.get("success", False),
-                "nc_msg": nc_res.get("message", "Unknown status"),
-            }
-
-paths = api.get_sync_paths() or {}
-gdrive_src = paths.get("gdrive_src") or "/"
-nc_dest_path = paths.get("nc_dest_path") or "/"
+            verification_result = api.verify_sync_route()
+            if verification_result:
+                st.session_state.route_verification = {
+                    "paths": current_route_paths,
+                    "result": verification_result.model_dump(),
+                }
+            else:
+                st.error("Unable to verify the configured sync route.")
 
 # Check session state verification or fallback to endpoint status
-verification = st.session_state.get("route_verification")
+cached_verification = st.session_state.get("route_verification")
+verification = (
+    cached_verification.get("result")
+    if isinstance(cached_verification, dict)
+    and cached_verification.get("paths") == current_route_paths
+    else None
+)
 
 card_col1, card_col2 = st.columns(2)
 
 with card_col1:
     with st.container(border=True):
         st.markdown("#### 📁 Google Drive Source")
-        st.markdown(f"**Path**: `{gdrive_src}`")
+        st.markdown(f"**Path**: `{gdrive_src or 'Not configured'}`")
         st.markdown("**Remote Target**: `gdrive:`")
         if verification:
-            if verification["gdrive_ok"]:
-                st.success(f"🟢 **Endpoint Verified**: {verification['gdrive_msg']}")
+            source = verification["source"]
+            if source["path_ok"]:
+                st.success(f"🟢 **Endpoint Verified**: {source['message']}")
             else:
-                st.error(f"🔴 **Verification Failed**: {verification['gdrive_msg']}")
+                st.error(f"🔴 **Verification Failed**: {source['message']}")
         else:
-            gdrive_status = api.get_google_drive_status() or {}
-            if gdrive_status.get("connected"):
+            gdrive_status = api.get_google_drive_endpoint_status()
+            if gdrive_status and gdrive_status.configured:
                 st.markdown("🟢 **Status**: Authenticated & Connected")
             else:
                 st.markdown("🔴 **Status**: Disconnected / Expired")
@@ -159,61 +169,56 @@ with card_col1:
 with card_col2:
     with st.container(border=True):
         st.markdown("#### ☁️ Nextcloud Destination")
-        st.markdown(f"**Path**: `{nc_dest_path}`")
+        st.markdown(f"**Path**: `{nc_dest_path or 'Not configured'}`")
         st.markdown("**Remote Target**: `ncwebdav:`")
         if verification:
-            if verification["nc_ok"]:
-                st.success(f"🟢 **Endpoint Verified**: {verification['nc_msg']}")
+            destination = verification["destination"]
+            if destination["path_ok"]:
+                st.success(f"🟢 **Endpoint Verified**: {destination['message']}")
             else:
-                st.error(f"🔴 **Verification Failed**: {verification['nc_msg']}")
+                st.error(f"🔴 **Verification Failed**: {destination['message']}")
         else:
-            nc_status = api.get_nextcloud_status() or {}
-            if nc_status.get("configured"):
+            nc_status = api.get_nextcloud_endpoint_status()
+            if nc_status and nc_status.configured:
                 st.markdown("🟢 **Status**: WebDAV Configured")
             else:
                 st.markdown("🔴 **Status**: Not Configured")
-
-if verification:
-    st.caption(f"Last verified: {format_iso_time(verification['timestamp'], include_relative=True)}")
 
 st.divider()
 
 # 5. Last Completed Sync Summary
 st.subheader("🏁 Last Sync Execution")
-raw_recent = api.get_runs(limit=1)
-if isinstance(raw_recent, list):
-    recent_runs = raw_recent
-elif isinstance(raw_recent, dict):
-    recent_runs = raw_recent.get("runs", [])
-else:
-    recent_runs = []
+recent_runs = api.get_recent_runs(limit=1) or []
 
 if not recent_runs:
     st.info("No sync runs recorded yet. Click 'Sync Now' above to trigger your first run.")
 else:
     last_run = recent_runs[0]
-    run_id = last_run.get("id")
-    status = last_run.get("status", "unknown")
+    run_id = last_run.id
+    status = last_run.status
     status_pill = render_status_pill(status)
-    started_at = last_run.get("started_at")
-    completed_at = last_run.get("completed_at")
-    duration = last_run.get("duration")
-    bytes_trans = last_run.get("bytes_transferred", 0)
-    files_trans = last_run.get("files_transferred", 0)
-    error_msg = last_run.get("error_message")
+    started_at = last_run.started_at
+    finished_at = last_run.finished_at
+    duration = last_run.duration_seconds
+    bytes_trans = last_run.bytes_transferred
+    mutations = last_run.mutation_count
+    error_msg = last_run.message
 
     last_col1, last_col2, last_col3, last_col4 = st.columns(4)
     with last_col1:
         st.metric("Latest Execution", f"Run #{run_id}", delta=status.upper(), border=True)
+        st.markdown(status_pill)
     with last_col2:
-        st.metric("Completed At", format_iso_time(completed_at or started_at), border=True)
+        st.metric("Completed At", format_iso_time(finished_at or started_at), border=True)
     with last_col3:
         st.metric("Duration / Volume", format_duration(duration), f"{format_bytes(bytes_trans)} synced", border=True)
     with last_col4:
-        st.metric("Files Mutated", f"{files_trans} files", border=True)
+        st.metric("Files Mutated", f"{mutations} files", border=True)
 
     if error_msg:
-        st.error(f"**Run Failure Details**: {error_msg}")
+        st.error(f"**Run Details**: {error_msg}")
+    if last_run.errors:
+        st.error(f"**Errors recorded**: {last_run.errors}")
 
     if st.button("📋 View Full Details in Run History", use_container_width=False):
         st.switch_page("pages/history.py")

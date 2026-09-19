@@ -1,8 +1,8 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 2.2.2
-# Last Updated: 2025-09-30
+# Version: 3.2.0
+# Last Updated: 2026-09-19
 
-import glob
+import os
 import shutil
 import tempfile
 import time
@@ -11,50 +11,34 @@ from typing import List, Optional, Tuple
 from urllib.request import ProxyHandler, Request, build_opener
 
 import typer
-from rich.live import Live
-
-from ops.cli.ui.layout import UpdateLayout, step_context
-from ops.cli.ui.panels import (
-    show_changelog,
-    show_completion_summary,
-    show_confirmation_prompt,
-    show_error_recovery,
-    show_next_steps,
-    show_service_logs,
-    show_version_info,
-)
+from ops.cli.ui.layout import UpdateLayout
 from ops.cli.ui.progress import (
     show_error,
     show_header,
     show_info,
     show_success,
-    show_warning,
-)
-from ops.cli.ui.tables import (
-    create_backup_info_table,
-    create_file_changes_table,
-    create_health_check_table,
-    create_service_status_table,
 )
 from ops.cli.utils import (
     check_systemd_service,
-    compare_directories,
-    create_backup,
     get_backup_dir,
-    get_file_size_human,
-    get_git_repo,
     get_install_dir,
     get_mascloner_user,
-    install_cli_dependencies,
     require_root,
     run_command,
     start_service,
     stop_service,
 )
+from ops.cli.transaction import (
+    UpdateTransactionError,
+    check_python_version,
+    extract_verified_release,
+    run_update_transaction,
+    validate_release,
+)
 
 # Version information
-UPDATE_CMD_VERSION = "3.0.0"
-UPDATE_CMD_DATE = "2025-09-30"
+UPDATE_CMD_VERSION = "3.2.0"
+UPDATE_CMD_DATE = "2026-09-19"
 
 
 def main(
@@ -78,21 +62,12 @@ def main(
     )
 ):
     """
-    Update MasCloner to the latest version.
-    
-    [dim]CLI Update Command v2.2.2 (2025-09-30)[/dim]
-    
-    This command will:
-    - Check for available updates (via git commit comparison)
-    - Create a backup of your installation
-    - Stop running services
-    - Update code and dependencies
-    - Clear Python cache files
-    - Restart services
-    - Run health checks
-    """
-    start_time = time.time()
+    Install a checksum-verified, immutable MasCloner release.
 
+    The complete transaction backs up the current installation, installs
+    the release and its dependencies, runs migrations, and checks service
+    health. A failed phase restores the verified recovery bundle.
+    """
     show_header(
         "MasCloner Update",
         f"Safely update your MasCloner installation to the latest version\nCLI Update Command v{UPDATE_CMD_VERSION} ({UPDATE_CMD_DATE})",
@@ -103,456 +78,90 @@ def main(
 
     install_dir = get_install_dir()
     backup_dir = get_backup_dir()
-    git_repo = get_git_repo()
     mascloner_user = get_mascloner_user()
 
     if not install_dir.exists():
         show_error(f"Installation not found at {install_dir}")
         raise typer.Exit(1)
 
-    # Create layout and setup steps
-    layout = UpdateLayout()
-    layout.add_step("Check prerequisites")
-    layout.add_step("Check for updates")
-    layout.add_step("Create backup")
-    layout.add_step("Stop services")
-    layout.add_step("Update code")
-    layout.add_step("Update dependencies")
-    layout.add_step("Run migrations")
-    layout.add_step("Update services")
-    layout.add_step("Start services")
-    layout.add_step("Health check")
-
-    current_step = 0
-    warnings: List[str] = []
-    backup_path: Optional[Path] = None
-
-    # Run the update within a Live context for real-time display
-    with Live(layout.render(), refresh_per_second=10) as live:
+    # v3.2 update sources are immutable release payloads.  Deliberately do
+    # not fall back to a mutable default branch: that was the source of the
+    # 3.1 dependency/code mismatch.
+    release_dir = os.environ.get("MASCLONER_RELEASE_DIR")
+    release_archive = os.environ.get("MASCLONER_RELEASE_ARCHIVE")
+    release_sha256 = os.environ.get("MASCLONER_RELEASE_SHA256")
+    if release_dir or release_archive:
         try:
-            if dry_run:
-                layout.add_log("Running in DRY RUN mode - no changes will be made", style="yellow")
-
-            # Step 1: Prerequisites
-            with step_context(layout, current_step):
-                prereq_ok = check_prerequisites(install_dir, layout)
-                if not prereq_ok:
-                    raise typer.Exit(1)
-            current_step += 1
-
-            # Step 2: Check for updates
-            with step_context(layout, current_step):
-                has_updates, update_data = check_for_updates(install_dir, git_repo, layout)
-
-            if not has_updates:
-                current_step += 1
-                layout.add_log("Already up to date! No updates available.", style="green")
-                live.stop()
-                show_success("Already up to date! No updates available.")
-                raise typer.Exit(0)
-
-            # Unpack update data
-            temp_dir, changelog, changed_files, remote_commit = update_data
-            current_step += 1
-
-            if check_only:
-                layout.add_log("Updates are available!", style="green")
-                layout.add_log("Run without --check-only to install updates", style="blue")
-                if temp_dir:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                live.stop()
-                
-                # Show changelog
-                if changelog:
-                    from ops.cli.ui.panels import show_changelog
-                    show_changelog("\n".join(changelog))
-                
-                show_success("Updates are available!")
-                show_info("Run without --check-only to install updates")
-                raise typer.Exit(0)
-
-            # Display changelog and file changes
-            if changelog:
-                layout.add_log("=== Release Notes ===", style="bold cyan")
-                for commit in changelog[:5]:  # Show first 5 commits in log
-                    layout.add_log(f"  • {commit}", style="white")
-                if len(changelog) > 5:
-                    layout.add_log(f"  ... and {len(changelog) - 5} more commits", style="dim")
-
-            # Confirm update (pause live display for prompt)
-            if not yes and not dry_run:
-                live.stop()
-                details = [
-                    "Services will be temporarily stopped",
-                    "A backup will be created automatically",
-                    "Update typically takes 1-2 minutes",
-                ]
-                if not show_confirmation_prompt("Proceed with update?", details, default=True):
-                    show_info("Update cancelled")
-                    if temp_dir:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                    raise typer.Exit(0)
-                live.start()
-
-            if dry_run:
-                layout.add_log("Dry run complete - stopping here", style="blue")
-                if temp_dir:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                live.stop()
-                show_info("Dry run complete - stopping here")
-                raise typer.Exit(0)
-
-            # Step 3: Create backup
-            with step_context(layout, current_step):
-                if not skip_backup:
-                    backup_path = create_backup(install_dir, backup_dir)
-                    if backup_path:
-                        layout.add_log(f"Backup created: {backup_path.name}", style="green")
-                    else:
-                        layout.add_log("Failed to create backup", style="red")
-                        raise typer.Exit(1)
-                else:
-                    layout.add_log("Skipping backup (--skip-backup)", style="yellow")
-                    warnings.append("Backup was skipped")
-            current_step += 1
-
-            # Step 4: Stop services
-            with step_context(layout, current_step):
-                services_stopped = stop_all_services(layout)
-            current_step += 1
-
-            # Step 5: Update code
-            if not services_only and not deps_only:
-                with step_context(layout, current_step):
-                    if temp_dir:
-                        update_success = update_code(install_dir, Path(temp_dir), mascloner_user, layout)
-                    else:
-                        update_success = False
-                    
-                    if not update_success:
-                        raise typer.Exit(1)
-            else:
-                layout.complete_step(current_step, success=True)
-            current_step += 1
-
-            # Cleanup temp directory
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                layout.add_log("Cleaned up temporary files", style="dim")
-
-            # Clear Python bytecode cache
-            layout.add_log("Clearing Python cache files...", style="blue")
-            clear_python_cache(install_dir, layout)
-
-            # Step 6: Update dependencies
-            if not services_only:
-                with step_context(layout, current_step):
-                    deps_success = update_dependencies(install_dir, mascloner_user, layout)
-                    if not deps_success:
-                        warnings.append("Dependency update had warnings")
-            else:
-                layout.complete_step(current_step, success=True)
-            current_step += 1
-
-            # Step 7: Run migrations
-            if not services_only and not deps_only:
-                with step_context(layout, current_step):
-                    run_migrations(install_dir, mascloner_user, layout)
-            else:
-                layout.complete_step(current_step, success=True)
-            current_step += 1
-
-            # Step 8: Update systemd services
-            with step_context(layout, current_step):
-                services_updated = update_systemd_services(install_dir, layout)
-            current_step += 1
-
-            # Step 9: Start services
-            with step_context(layout, current_step):
-                services_started = start_all_services(layout)
-
-            failed_services = [name for name, status, _ in services_started if status != "active"]
-            if failed_services:
-                warnings.append(f"Failed to start: {', '.join(failed_services)}")
-            current_step += 1
-
-            # Step 10: Health check
-            with step_context(layout, current_step):
-                layout.add_log("Waiting for services to fully initialize...", style="blue")
-                time.sleep(5)
-                health_checks = run_health_checks(layout)
-
-            failed_checks = [name for name, passed, _ in health_checks if not passed]
-            if failed_checks:
-                warnings.append(f"Health check failures: {', '.join(failed_checks)}")
-
-            # Update complete - save new commit hash
-            commit_file = install_dir / ".commit_hash"
-            try:
-                commit_file.write_text(remote_commit)
-                # Set ownership to mascloner user
-                run_command(
-                    ["chown", f"{mascloner_user}:{mascloner_user}", str(commit_file)],
-                    check=False,
+            unsupported_modes = [
+                flag
+                for enabled, flag in (
+                    (skip_backup, "--skip-backup"),
+                    (services_only, "--services-only"),
+                    (deps_only, "--deps-only"),
                 )
-                layout.add_log(f"Saved version: {remote_commit[:8]}", style="dim")
-            except Exception as e:
-                layout.add_log(f"Warning: Could not save version file: {e}", style="yellow")
-            
-            duration = time.time() - start_time
-            layout.add_log(f"Update completed in {duration:.1f}s", style="bold green")
-
-            # Stop live display and show final summary
-            live.stop()
-
-            # Reinstall CLI dependencies and re-link command
-            show_info("Finalizing CLI installation...")
-            if install_cli_dependencies(install_dir):
-                show_success("CLI dependencies verified")
-            else:
-                show_warning("CLI dependency check failed - run install-cli.sh manually")
-
-            wrapper_path = install_dir / "ops" / "scripts" / "mascloner"
-            system_bin = Path("/usr/local/bin/mascloner")
-
-            if wrapper_path.exists():
-                run_command(["chmod", "+x", str(wrapper_path)], check=False)
-                if system_bin.exists() or system_bin.is_symlink():
-                    system_bin.unlink(missing_ok=True)
-                system_bin.symlink_to(wrapper_path)
-                show_success("CLI command linked at /usr/local/bin/mascloner")
-            else:
-                show_warning("CLI wrapper missing - unable to refresh mascloner command")
-
-            # Show final summary
-            show_completion_summary(
-                success=len(failed_services) == 0 and len(failed_checks) == 0,
-                duration=duration,
-                steps_completed=current_step,
-                total_steps=10,
-                warnings=warnings if warnings else None,
-            )
-
-            next_steps = [
-                "🔍 Review the health check results above",
-                "🌐 Access your MasCloner UI to verify functionality",
-                "📊 Monitor service logs: journalctl -f -u mascloner-api",
+                if enabled
             ]
-            if backup_path:
-                next_steps.append(f"💾 Backup saved at: {backup_path}")
-            show_next_steps(next_steps)
-
-        except KeyboardInterrupt:
-            live.stop()
-            show_error("Update interrupted by user")
-            if backup_path:
-                show_error_recovery(
-                    "Update was interrupted",
-                    [
-                        "Services may be in an inconsistent state",
-                        f"Restore from backup: {backup_path}",
-                        "Or retry the update",
-                    ],
+            if unsupported_modes:
+                raise UpdateTransactionError(
+                    ", ".join(unsupported_modes)
+                    + " cannot be used with verified v3.2 updates; run the complete transaction or use --check-only"
                 )
-            raise typer.Exit(130)
-        except typer.Exit:
-            raise
-        except Exception as e:
-            live.stop()
-            show_error(f"Update failed: {e}")
-            if backup_path:
-                show_error_recovery(
-                    str(e),
-                    [
-                        f"Restore from backup: {backup_path}",
-                        "Check logs: journalctl -u mascloner-api",
-                        "Contact support if issue persists",
-                    ],
-                )
-            raise typer.Exit(1)
-
-
-def check_prerequisites(install_dir: Path, layout: Optional[UpdateLayout] = None) -> bool:
-    """Check if all prerequisites are met."""
-    checks = []
-    
-    # Check if git is installed
-    exit_code, _, _ = run_command(["which", "git"], check=False, capture=True)
-    git_ok = exit_code == 0
-    checks.append(("Git installed", git_ok))
-    if layout:
-        layout.add_log(f"Git: {'✓' if git_ok else '✗'}", style="green" if git_ok else "red")
-
-    # Check if systemctl is available
-    exit_code, _, _ = run_command(["which", "systemctl"], check=False, capture=True)
-    systemctl_ok = exit_code == 0
-    checks.append(("SystemD available", systemctl_ok))
-    if layout:
-        layout.add_log(f"SystemD: {'✓' if systemctl_ok else '✗'}", style="green" if systemctl_ok else "red")
-
-    # Check if .venv exists
-    venv_ok = (install_dir / ".venv").exists()
-    checks.append(("Virtual environment", venv_ok))
-    if layout:
-        layout.add_log(f"Virtual env: {'✓' if venv_ok else '✗'}", style="green" if venv_ok else "red")
-
-    all_ok = all(ok for _, ok in checks)
-    
-    if not all_ok and not layout:
-        show_error("Prerequisites check failed")
-        for name, ok in checks:
-            if not ok:
-                show_error(f"  ✗ {name}")
-    
-    return all_ok
-
-
-def check_for_updates(
-    install_dir: Path, git_repo: str, layout: Optional[UpdateLayout] = None
-) -> Tuple[bool, Optional[Tuple]]:
-    """Check if updates are available using git commit comparison.
-    
-    Returns:
-        Tuple of (has_updates, update_data)
-        where update_data is (temp_dir, changelog, changed_files, remote_commit) or None
-    """
-    temp_dir = tempfile.mkdtemp(prefix="mascloner_update_")
-    
-    try:
-        # Get current local commit hash from stored file
-        commit_file = install_dir / ".commit_hash"
-        local_commit = "unknown"
-        
-        if commit_file.exists():
-            try:
-                local_commit = commit_file.read_text().strip()
-                if layout:
-                    layout.add_log(f"Local version: {local_commit[:8]}", style="dim")
-            except Exception as e:
-                if layout:
-                    layout.add_log(f"Warning: Could not read version file: {e}", style="yellow")
-        else:
-            if layout:
-                layout.add_log("No version file found (first install or old version)", style="yellow")
-        
-        # Clone latest version
-        exit_code, _, _ = run_command(
-            ["git", "clone", "--depth", "1", git_repo, temp_dir],
-            check=False,
-            capture=True,
-        )
-        
-        if exit_code != 0:
-            if layout:
-                layout.add_log("Failed to fetch updates from repository", style="red")
-            else:
-                show_error("Failed to fetch updates from repository")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return False, None
-
-        # Get remote commit hash
-        exit_code, remote_commit, _ = run_command(
-            ["git", "-C", temp_dir, "rev-parse", "HEAD"],
-            check=False,
-            capture=True,
-        )
-        
-        if exit_code != 0:
-            if layout:
-                layout.add_log("Failed to get remote commit hash", style="red")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return False, None
-        
-        remote_commit = remote_commit.strip()
-        if layout:
-            layout.add_log(f"Remote commit: {remote_commit[:8]}", style="dim")
-        
-        # Compare commits
-        if local_commit == remote_commit:
-            if layout:
-                layout.add_log("Already at latest version", style="dim")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return False, None
-        
-        # Different commits - show what changed
-        if layout:
-            layout.add_log(f"Update available: {local_commit[:8]} → {remote_commit[:8]}", style="cyan")
-        
-        # Get commit messages between versions (release notes)
-        changelog = []
-        if local_commit != "unknown":
-            # Show commits between local and remote
-            exit_code, log_output, _ = run_command(
-                ["git", "-C", temp_dir, "log", "--oneline", "--no-decorate", f"{local_commit}..{remote_commit}"],
-                check=False,
-                capture=True,
-            )
-            
-            if exit_code == 0 and log_output.strip():
-                changelog = log_output.strip().split('\n')
-                if layout:
-                    layout.add_log(f"Found {len(changelog)} new commits", style="blue")
-        else:
-            # First install or no version file - show last 10 commits from remote
-            exit_code, log_output, _ = run_command(
-                ["git", "-C", temp_dir, "log", "--oneline", "--no-decorate", "-n", "10"],
-                check=False,
-                capture=True,
-            )
-            
-            if exit_code == 0 and log_output.strip():
-                changelog = log_output.strip().split('\n')
-                if layout:
-                    layout.add_log(f"Showing last {len(changelog)} commits (new install)", style="blue")
-        
-        # Get changed files between commits
-        changed_files = []
-        if local_commit != "unknown":
-            exit_code, diff_output, _ = run_command(
-                ["git", "-C", temp_dir, "diff", "--name-status", f"{local_commit}..{remote_commit}"],
-                check=False,
-                capture=True,
-            )
-            
-            if exit_code == 0 and diff_output.strip():
-                for line in diff_output.strip().split('\n'):
-                    parts = line.split('\t', 1)
-                    if len(parts) == 2:
-                        status, filepath = parts
-                        changed_files.append((status, filepath))
-                
-                if layout:
-                    modified = len([f for s, f in changed_files if s == 'M'])
-                    added = len([f for s, f in changed_files if s == 'A'])
-                    deleted = len([f for s, f in changed_files if s == 'D'])
-                    layout.add_log(
-                        f"Files: {modified} modified, {added} added, {deleted} deleted",
-                        style="cyan"
+            def install(source: Path) -> dict:
+                if check_only or dry_run:
+                    manifest = validate_release(source)
+                    check_python_version(install_dir / ".venv" / "bin" / "python")
+                    installed_revision = (install_dir / ".commit_hash").read_text(encoding="utf-8").strip()
+                    state = "already current" if installed_revision == manifest["revision"] else "update available"
+                    show_info(
+                        f"Verified release {manifest['version']} ({manifest['revision'][:12]}): {state}. "
+                        "No files or services were changed."
                     )
-        else:
-            # For new installs, show total file count
-            exit_code, ls_output, _ = run_command(
-                ["find", str(temp_dir), "-type", "f", "-name", "*.py"],
-                check=False,
-                capture=True,
+                    return {"source": {"version": manifest["version"], "revision": manifest["revision"]}, "state": state}
+                return run_update_transaction(
+                    source,
+                    install_dir,
+                    backup_dir,
+                    install_dependencies=lambda root: update_dependencies(root, mascloner_user),
+                    run_migrations=lambda root: run_migrations(root, mascloner_user),
+                    install_services=update_systemd_services,
+                    stop_services=lambda: _services_stopped(stop_all_services()),
+                    start_services=lambda: _services_started(start_all_services()),
+                    health_check=lambda: all(ok for _, ok, _ in run_health_checks()),
+                    rollback_services_dir=Path(os.environ.get("MASCLONER_SYSTEMD_DIR", "/etc/systemd/system")),
+                    owner=mascloner_user,
+                )
+
+            if release_archive:
+                if not release_sha256:
+                    raise UpdateTransactionError("MASCLONER_RELEASE_SHA256 is required with MASCLONER_RELEASE_ARCHIVE")
+                with tempfile.TemporaryDirectory(prefix="mascloner-release-") as temporary:
+                    source_dir = extract_verified_release(Path(release_archive), release_sha256, Path(temporary))
+                    transaction = install(source_dir)
+            else:
+                # The directory form is only appropriate for a local/offline
+                # artifact; RELEASE.json still verifies every payload file.
+                assert release_dir is not None
+                transaction = install(Path(release_dir))
+        except UpdateTransactionError as exc:
+            show_error(str(exc))
+            raise typer.Exit(1)
+        if transaction["state"] == "completed":
+            show_success(
+                f"Installed verified release {transaction['source']['version']} "
+                f"({transaction['source']['revision'][:12]})"
             )
-            
-            if exit_code == 0 and ls_output.strip():
-                py_count = len(ls_output.strip().split('\n'))
-                if layout:
-                    layout.add_log(f"Installing {py_count} Python files", style="cyan")
-        
-        # Store changelog, file changes, and remote commit for later use
-        return True, (temp_dir, changelog, changed_files, remote_commit)
-
-    except Exception as e:
-        if layout:
-            layout.add_log(f"Error checking for updates: {e}", style="red")
         else:
-            show_error(f"Error checking for updates: {e}")
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return False, None
-
+            show_info(
+                f"Verified release {transaction['source']['version']} "
+                f"({transaction['source']['revision'][:12]}): {transaction['state']}"
+            )
+        return
+    show_error(
+        "No immutable release source configured. Set MASCLONER_RELEASE_ARCHIVE and "
+        "MASCLONER_RELEASE_SHA256, or MASCLONER_RELEASE_DIR for a local verified payload. "
+        "Check-only and dry-run also require that immutable source."
+    )
+    raise typer.Exit(1)
 
 def stop_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, str, str]]:
     """Stop all MasCloner services."""
@@ -575,6 +184,15 @@ def stop_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, 
     return results
 
 
+def _services_stopped(results: List[Tuple[str, str, str]]) -> bool:
+    """Turn the presentation-oriented service result into a hard update gate."""
+    states = {service: (status, action) for service, status, action in results}
+    required = ("mascloner-api", "mascloner-ui")
+    if any(states.get(service, ("missing", "failed"))[0] not in {"inactive", "stopped"} for service in required):
+        return False
+    return all(action != "failed" for _, _, action in results)
+
+
 def start_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str, str, str]]:
     """Start all MasCloner services."""
     services = ["mascloner-api", "mascloner-ui", "mascloner-tunnel"]
@@ -584,7 +202,7 @@ def start_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str,
         success = start_service(service)
         time.sleep(0.5)
         is_running, status = check_systemd_service(service)
-        action = "started" if is_running else "failed"
+        action = "started" if success and is_running else "failed"
         results.append((service, status, action))
         if layout:
             layout.add_log(f"{service}: {action}", style="green" if is_running else "red")
@@ -592,75 +210,12 @@ def start_all_services(layout: Optional[UpdateLayout] = None) -> List[Tuple[str,
     return results
 
 
-def update_code(
-    install_dir: Path, temp_dir: Path, user: str, layout: Optional[UpdateLayout] = None
-) -> bool:
-    """Update application code from temp directory."""
-    try:
-        # Update app directory
-        app_src = temp_dir / "app"
-        app_dst = install_dir / "app"
-        if app_src.exists():
-            shutil.rmtree(app_dst, ignore_errors=True)
-            shutil.copytree(app_src, app_dst)
-            if layout:
-                layout.add_log("Updated app/ directory", style="green")
-
-        # Update ops directory
-        ops_src = temp_dir / "ops"
-        ops_dst = install_dir / "ops"
-        if ops_src.exists():
-            shutil.rmtree(ops_dst, ignore_errors=True)
-            shutil.copytree(ops_src, ops_dst)
-            if layout:
-                layout.add_log("Updated ops/ directory", style="green")
-
-        # Update alembic migration files (v2.0+)
-        alembic_ini_src = temp_dir / "alembic.ini"
-        if alembic_ini_src.exists():
-            shutil.copy(alembic_ini_src, install_dir / "alembic.ini")
-            if layout:
-                layout.add_log("Updated alembic.ini", style="green")
-
-        alembic_dir_src = temp_dir / "alembic"
-        alembic_dir_dst = install_dir / "alembic"
-        if alembic_dir_src.exists():
-            shutil.rmtree(alembic_dir_dst, ignore_errors=True)
-            shutil.copytree(alembic_dir_src, alembic_dir_dst)
-            if layout:
-                layout.add_log("Updated alembic/ directory", style="green")
-
-        # Update tests directory (for development/verification)
-        tests_src = temp_dir / "tests"
-        tests_dst = install_dir / "tests"
-        if tests_src.exists():
-            shutil.rmtree(tests_dst, ignore_errors=True)
-            shutil.copytree(tests_src, tests_dst)
-            if layout:
-                layout.add_log("Updated tests/ directory", style="green")
-
-        # Update .env.example if exists (without overwriting .env)
-        env_example_src = temp_dir / ".env.example"
-        if env_example_src.exists():
-            shutil.copy(env_example_src, install_dir / ".env.example")
-            if layout:
-                layout.add_log("Updated .env.example", style="green")
-
-        # Set ownership
-        run_command(
-            ["chown", "-R", f"{user}:{user}", str(install_dir)],
-            check=False,
-        )
-        if layout:
-            layout.add_log("Set file ownership", style="dim")
-
-        return True
-    except Exception as e:
-        if layout:
-            layout.add_log(f"Failed to update code: {e}", style="red")
-        else:
-            show_error(f"Failed to update code: {e}")
+def _services_started(results: List[Tuple[str, str, str]]) -> bool:
+    states = {service: status for service, status, _ in results}
+    if any(states.get(service) != "active" for service in ("mascloner-api", "mascloner-ui")):
         return False
+    return states.get("mascloner-tunnel") in {"active", "not_installed"}
+
 
 
 def update_dependencies(
@@ -672,8 +227,8 @@ def update_dependencies(
 
     if not requirements.exists():
         if layout:
-            layout.add_log("No requirements.txt found", style="yellow")
-        return True
+            layout.add_log("Required requirements.txt is missing", style="red")
+        return False
 
     try:
         exit_code, _, _ = run_command(
@@ -696,126 +251,51 @@ def update_dependencies(
         return False
 
 
-def clear_python_cache(install_dir: Path, layout: Optional[UpdateLayout] = None) -> None:
-    """Clear all Python bytecode cache files."""
-    cache_count = 0
-    
-    # Remove all .pyc files
-    for pyc_file in glob.glob(str(install_dir / "**" / "*.pyc"), recursive=True):
-        try:
-            Path(pyc_file).unlink()
-            cache_count += 1
-        except Exception:
-            pass
-    
-    # Remove all __pycache__ directories
-    for pycache_dir in glob.glob(str(install_dir / "**" / "__pycache__"), recursive=True):
-        try:
-            shutil.rmtree(pycache_dir)
-            cache_count += 1
-        except Exception:
-            pass
-    
-    if layout:
-        if cache_count > 0:
-            layout.add_log(f"Removed {cache_count} cache files/directories", style="green")
-        else:
-            layout.add_log("No cache files to remove", style="dim")
-
 
 def run_migrations(
     install_dir: Path, user: str, layout: Optional[UpdateLayout] = None
 ) -> bool:
-    """Run database migrations using Alembic."""
-    alembic_ini = install_dir / "alembic.ini"
-    alembic_dir = install_dir / "alembic"
-    venv_alembic = install_dir / ".venv" / "bin" / "alembic"
-
-    # Check if Alembic is configured (v2.0+)
-    if not (alembic_ini.exists() and alembic_dir.exists()):
+    """Run the compatible-baseline schema classifier as a hard update gate."""
+    python = install_dir / ".venv" / "bin" / "python"
+    if not python.is_file():
         if layout:
-            layout.add_log("No Alembic migrations configured", style="dim")
-        return True
-
-    # Check if alembic is installed
-    exit_code, output, _ = run_command(
-        ["sudo", "-u", user, str(install_dir / ".venv" / "bin" / "pip"), "list"],
+            layout.add_log("Virtual-environment Python is missing", style="red")
+        return False
+    script = (
+        "from pathlib import Path; from dotenv import load_dotenv; "
+        f"root = Path({str(install_dir)!r}); load_dotenv(root / '.env'); "
+        "from app.api.db import upgrade_database_to_head; import os, sys; "
+        "sys.exit(0 if upgrade_database_to_head(os.environ.get('MASCLONER_DB_PATH', str(root / 'data/mascloner.db'))) else 1)"
+    )
+    exit_code, _, stderr = run_command(
+        ["sudo", "-u", user, str(python), "-c", script],
         check=False,
         capture=True,
+        cwd=str(install_dir),
     )
-    
-    if exit_code != 0 or "alembic" not in output.lower():
+    if exit_code == 0:
         if layout:
-            layout.add_log("Alembic not installed, skipping migrations", style="yellow")
+            layout.add_log("Migrations completed successfully", style="green")
         return True
-
-    try:
-        # Check current migration version
-        exit_code, current_version, _ = run_command(
-            ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "current"],
-            check=False,
-            capture=True,
-            cwd=str(install_dir),
-        )
-
-        # If database not stamped, stamp it with current head
-        if exit_code != 0 or not current_version.strip():
-            if layout:
-                layout.add_log("Database not under Alembic control, stamping...", style="blue")
-            
-            exit_code, _, _ = run_command(
-                ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "stamp", "head"],
-                check=False,
-                capture=True,
-                cwd=str(install_dir),
-            )
-            
-            if exit_code == 0:
-                if layout:
-                    layout.add_log("Database stamped successfully", style="green")
-            else:
-                if layout:
-                    layout.add_log("Could not stamp database, will try upgrade", style="yellow")
-
-        # Run migrations
-        if layout:
-            layout.add_log("Running Alembic migrations...", style="blue")
-
-        exit_code, stdout, stderr = run_command(
-            ["sudo", "-u", user, str(venv_alembic), "-c", str(alembic_ini), "upgrade", "head"],
-            check=False,
-            capture=True,
-            cwd=str(install_dir),
-        )
-
-        if exit_code == 0:
-            if layout:
-                layout.add_log("Migrations completed successfully", style="green")
-            return True
-        else:
-            if layout:
-                layout.add_log(f"Migration warning: {stderr[:100]}", style="yellow")
-            return True  # Continue anyway, might just be already at head
-
-    except Exception as e:
-        if layout:
-            layout.add_log(f"Migration error: {e}", style="yellow")
-        return True  # Don't fail the update for migration issues
+    if layout:
+        layout.add_log(f"Migration failed: {stderr[:160]}", style="red")
+    return False
 
 
 def update_systemd_services(
     install_dir: Path, layout: Optional[UpdateLayout] = None
 ) -> bool:
     """Update systemd service files if needed."""
-    service_dir = Path("/etc/systemd/system")
+    service_dir = Path(os.environ.get("MASCLONER_SYSTEMD_DIR", "/etc/systemd/system"))
     source_services = install_dir / "ops" / "systemd"
 
     if not source_services.exists():
         if layout:
-            layout.add_log("No service files to update", style="dim")
-        return True
+            layout.add_log("Required service files are missing", style="red")
+        return False
 
     updated = False
+    failed = False
     for service_file in source_services.glob("mascloner-*.service"):
         dest = service_dir / service_file.name
         try:
@@ -824,15 +304,18 @@ def update_systemd_services(
             if layout:
                 layout.add_log(f"Updated {service_file.name}", style="green")
         except Exception as e:
+            failed = True
             if layout:
-                layout.add_log(f"Failed to update {service_file.name}: {e}", style="yellow")
+                layout.add_log(f"Failed to update {service_file.name}: {e}", style="red")
 
     if updated:
-        run_command(["systemctl", "daemon-reload"], check=False)
+        exit_code, _, _ = run_command(["systemctl", "daemon-reload"], check=False)
+        if exit_code != 0:
+            failed = True
         if layout:
             layout.add_log("Reloaded systemd daemon", style="dim")
 
-    return True
+    return not failed
 
 
 def _check_endpoint_with_retry(

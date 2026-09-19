@@ -38,6 +38,9 @@ def migrate_legacy_statuses(target: Engine | Connection) -> None:
 
     try:
         rows = conn.execute(text("SELECT DISTINCT status FROM runs")).fetchall()
+        replacements: list[tuple[object, str]] = []
+        # Validate the complete set before changing a row.  This makes an
+        # unknown status an all-or-nothing failure for cutover and Alembic.
         for row in rows:
             st = row[0]
             if not st:
@@ -45,17 +48,19 @@ def migrate_legacy_statuses(target: Engine | Connection) -> None:
             st_lower = str(st).lower()
             if st_lower in CANONICAL_STATUSES:
                 continue
-            if st_lower in LEGACY_STATUS_MAP:
-                new_st = LEGACY_STATUS_MAP[st_lower]
-                conn.execute(
-                    text("UPDATE runs SET status = :new_st WHERE status = :old_st"),
-                    {"new_st": new_st, "old_st": st},
-                )
-                logger.info("Migrated run status %r -> %r", st, new_st)
-            else:
+            new_status = LEGACY_STATUS_MAP.get(st_lower)
+            if new_status is None:
                 raise ValueError(
                     f"Unknown legacy run status {st!r} encountered. Migration aborted safely."
                 )
+            replacements.append((st, new_status))
+
+        for old_status, new_status in replacements:
+            conn.execute(
+                text("UPDATE runs SET status = :new_st WHERE status = :old_st"),
+                {"new_st": new_status, "old_st": old_status},
+            )
+            logger.info("Migrated run status %r -> %r", old_status, new_status)
         if is_engine:
             conn.commit()
     finally:

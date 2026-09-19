@@ -35,6 +35,8 @@ class FakeRcloneScenario:
     mutate_config: Optional[Dict[str, Dict[str, str]]] = None
     remotes_override: Optional[List[str]] = None
     directories_override: Optional[List[str]] = None
+    missing_paths: List[str] = field(default_factory=list)
+    failing_remotes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -175,6 +177,11 @@ def run_fake_rclone_cli(
 
     subcommand = pos_args[0] if pos_args else ""
 
+    if subcommand in ("about", "lsd") and len(pos_args) > 1:
+        if pos_args[1].split(":", 1)[0] in scenario.failing_remotes:
+            sys.stderr.write("remote unavailable\n")
+            return 3
+
     # If sleep requested
     if scenario.sleep_seconds > 0:
         time.sleep(scenario.sleep_seconds)
@@ -218,6 +225,14 @@ def run_fake_rclone_cli(
         dirs = scenario.directories_override or ["Documents", "Photos", "Backups"]
         for d in dirs:
             sys.stdout.write(f"          -1 2026-09-01 12:00:00        -1 {d}\n")
+        return 0
+
+    if subcommand == "lsjson" and "--stat" in args:
+        selected = pos_args[1] if len(pos_args) > 1 else ""
+        if selected in scenario.missing_paths:
+            sys.stderr.write("directory not found\n")
+            return 3
+        sys.stdout.write(json.dumps({"Path": selected, "IsDir": True, "Size": -1}))
         return 0
 
     if subcommand == "lsjson":

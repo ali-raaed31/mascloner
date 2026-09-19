@@ -59,6 +59,8 @@ class ConfigRequest(BaseModel):
         segments = [seg for seg in stripped.replace("\\", "/").split("/") if seg]
         if ".." in segments:
             raise ValueError("Path traversal segments (..) are not allowed")
+        if stripped and not segments:
+            return "/"
         return "/".join(segments)
 
 
@@ -121,6 +123,22 @@ class ApiResponse(BaseModel):
     success: bool
     message: str
     data: Optional[Dict[str, Any]] = None
+
+
+class RouteEndpointVerification(BaseModel):
+    """Non-secret outcome for one fixed endpoint and its selected folder."""
+
+    remote_ok: bool
+    path_ok: bool
+    message: str
+
+
+class SyncRouteVerification(BaseModel):
+    """Verification of both persisted endpoints and selected sync folders."""
+
+    success: bool
+    source: RouteEndpointVerification
+    destination: RouteEndpointVerification
 
 
 class RcloneConfigRequest(BaseModel):

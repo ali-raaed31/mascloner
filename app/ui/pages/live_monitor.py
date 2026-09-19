@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 import streamlit as st
 
 try:
@@ -12,20 +11,16 @@ try:
     from app.ui.components.theme import (
         format_bytes,
         format_duration,
-        format_iso_time,
         get_status_badge_meta,
         render_hero_bar,
-        render_status_pill,
     )
 except ImportError:
     from api_client import APIClient
     from components.theme import (
         format_bytes,
         format_duration,
-        format_iso_time,
         get_status_badge_meta,
         render_hero_bar,
-        render_status_pill,
     )
 
 
@@ -101,35 +96,29 @@ def format_log_entry(entry: Any) -> tuple[str, str]:
 
 @st.fragment(run_every="2s" if auto_refresh else None)
 def render_live_telemetry():
-    current_run = api.get_current_run()
+    current_run = api.get_current_run_snapshot()
 
     if current_run:
-        run_id = current_run.get("id")
+        run_id = current_run.id
         st.session_state.monitored_run_id = run_id
 
-        pct = float(current_run.get("percentage") or 0.0)
-        progress_val = min(max(pct / 100.0, 0.0), 1.0)
-        st.progress(progress_val, text=f"Syncing Run #{run_id} — {pct:.1f}%")
+        if current_run.percentage is None:
+            st.info(f"Syncing Run #{run_id} — progress is unavailable from rclone.")
+        else:
+            pct = current_run.percentage
+            progress_val = min(max(pct / 100.0, 0.0), 1.0)
+            st.progress(progress_val, text=f"Syncing Run #{run_id} — {pct:.1f}%")
 
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            trans = current_run.get("bytes_transferred", 0)
-            total = current_run.get("total_bytes", 0)
-            st.metric("Transferred", f"{format_bytes(trans)}", f"of {format_bytes(total)}" if total else None)
+            st.metric("Transferred", format_bytes(current_run.bytes_transferred), "Total unavailable")
         with m2:
-            speed = current_run.get("speed_bps", 0)
-            st.metric("Current Speed", f"{format_bytes(speed)}/s")
+            speed = current_run.speed_bps
+            st.metric("Current Speed", f"{format_bytes(speed)}/s" if speed is not None else "Unavailable")
         with m3:
-            f_trans = current_run.get("files_transferred", 0)
-            f_total = current_run.get("total_files", 0)
-            st.metric("Files Progress", f"{f_trans}", f"of {f_total}" if f_total else None)
+            st.metric("Files Mutated", f"{current_run.mutation_count}", "Total unavailable")
         with m4:
-            elapsed = current_run.get("elapsed_seconds")
-            st.metric("Elapsed Time", format_duration(elapsed))
-
-        curr_file = current_run.get("current_file")
-        if curr_file:
-            st.markdown(f"📄 **Active File**: `{curr_file}`")
+            st.metric("Elapsed Time", format_duration(current_run.elapsed_seconds))
 
         # Stop button
         if st.button("🛑 Stop Active Sync", type="secondary", key="live_stop_btn"):
@@ -150,29 +139,31 @@ def render_live_telemetry():
 
     else:
         # No sync is actively running
-        recent_runs_resp = api.get_runs(limit=1) or {}
-        recent = recent_runs_resp.get("runs", [])
+        recent = api.get_recent_runs(limit=1) or []
         last_run = recent[0] if recent else None
 
         if last_run:
-            run_id = last_run.get("id")
-            status = last_run.get("status", "unknown")
+            run_id = last_run.id
+            status = last_run.status
             meta = get_status_badge_meta(status)
 
             if status == "completed":
                 st.success(f"### {meta['icon']} Run #{run_id} Completed Successfully")
             elif status == "failed":
-                st.error(f"### {meta['icon']} Run #{run_id} Failed: {last_run.get('error_message') or 'Unknown error'}")
+                st.error(f"### {meta['icon']} Run #{run_id} Failed: {last_run.message or 'Unknown error'}")
             else:
                 st.info(f"### {meta['icon']} Run #{run_id} Status: {meta['label']}")
 
             fin_col1, fin_col2, fin_col3 = st.columns(3)
             with fin_col1:
-                st.metric("Total Transferred", format_bytes(last_run.get("bytes_transferred")))
+                st.metric("Total Transferred", format_bytes(last_run.bytes_transferred))
             with fin_col2:
-                st.metric("Files Mutated", f"{last_run.get('files_transferred', 0)} files")
+                st.metric("Files Mutated", f"{last_run.mutation_count} files")
             with fin_col3:
-                st.metric("Duration", format_duration(last_run.get("duration")))
+                st.metric("Duration", format_duration(last_run.duration_seconds))
+
+            if last_run.errors:
+                st.error(f"Errors recorded: {last_run.errors}")
 
             # Navigation buttons (Q10=A)
             nav_col1, nav_col2 = st.columns(2)

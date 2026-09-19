@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator
 
-from sqlalchemy import create_engine, event, func, select, text, Engine
+from sqlalchemy import create_engine, event, func, inspect, select, text, Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -71,33 +72,169 @@ def init_db() -> None:
     Use Alembic for schema migrations after initial creation.
     """
     try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database initialized successfully at %s", DB_PATH)
+        database_file = Path(DB_PATH)
+        if database_file.is_file():
+            probe = sqlite3.connect(database_file.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                probe.execute("PRAGMA query_only=ON")
+                table_names = {
+                    row[0]
+                    for row in probe.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+            finally:
+                probe.close()
+        else:
+            table_names = set()
+        # A database which contains unrelated tables is an existing database,
+        # not a fresh MasCloner installation.  It must pass classification
+        # below instead of being silently mixed with a new schema.
+        created_new_database = not table_names or table_names == {"sqlite_sequence"}
+        if created_new_database:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database initialized successfully at %s", DB_PATH)
 
-        # Stamp if missing, otherwise upgrade any pending migrations
-        _stamp_alembic_if_needed()
-        run_migrations()
+            # Metadata creation already produced the current schema.  This is
+            # the sole safe direct-head stamp: there was no pre-existing data.
+            from alembic.command import stamp
+            stamp(_alembic_config(DB_PATH), "head")
+
+        if not upgrade_database_to_head(Path(DB_PATH)):
+            raise RuntimeError("Database schema upgrade failed; refusing to start with an unknown schema")
 
     except SQLAlchemyError as e:
         logger.error("Failed to initialize database: %s", e)
         raise
 
 
-def _stamp_alembic_if_needed() -> None:
-    """Stamp existing database with Alembic version if not already stamped."""
-    try:
-        from sqlalchemy import inspect
+LEGACY_BASELINE_REVISION = "20241224_000001"
 
-        inspector = inspect(engine)
-        if "alembic_version" not in inspector.get_table_names():
-            # Database exists but hasn't been stamped - stamp with current head
-            logger.info("Database not stamped with Alembic version, stamping...")
-            stamp_database_head()
+
+def classify_legacy_baseline(database_path: str | Path) -> str | None:
+    """Return the safe Alembic baseline for an unstamped legacy database.
+
+    Only the documented v2 schema is accepted.  A database with partial v3
+    columns is deliberately rejected because stamping it would hide an
+    interrupted upgrade and make data repair impossible to reason about.
+    """
+    candidate = Path(database_path)
+    if not candidate.is_file():
+        return None
+    # Classification must remain read-only, including on an unknown database;
+    # the normal application engine enables WAL and would mutate its header.
+    probe = sqlite3.connect(candidate.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        probe.execute("PRAGMA query_only=ON")
+        tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "alembic_version" in tables:
+            return "stamped"
+        required_tables = {"config", "runs", "file_events"}
+        if not required_tables.issubset(tables):
+            return None
+        config_columns = {row[1] for row in probe.execute("PRAGMA table_info(config)")}
+        run_columns = {row[1] for row in probe.execute("PRAGMA table_info(runs)")}
+        required_config = {"key", "value", "updated_at"}
+        required_runs = {
+            "id", "started_at", "finished_at", "status", "num_added",
+            "num_updated", "bytes_transferred", "errors", "log_path",
+        }
+        if not required_config.issubset(config_columns) or not required_runs.issubset(run_columns):
+            return None
+        if "provenance" in config_columns or "message" in run_columns:
+            # Older releases sometimes created the complete ORM schema with
+            # Base.metadata.create_all before Alembic was introduced.  It is
+            # safe to stamp only an exact current schema with canonical run
+            # values; a partial v3 schema remains unclassifiable.
+            expected_config = {"key", "value", "updated_at", "provenance"}
+            expected_runs = required_runs | {"message"}
+            expected_events = {
+                "id", "run_id", "timestamp", "action", "file_path",
+                "file_size", "file_hash", "message",
+            }
+            event_columns = {row[1] for row in probe.execute("PRAGMA table_info(file_events)")}
+            statuses = {
+                str(row[0]).lower()
+                for row in probe.execute("SELECT DISTINCT status FROM runs")
+                if row[0]
+            }
+            canonical = {"pending", "running", "completed", "failed", "aborted", "skipped"}
+            if (
+                config_columns == expected_config
+                and run_columns == expected_runs
+                and event_columns == expected_events
+                and statuses.issubset(canonical)
+            ):
+                return "head"
+            return None
+        run_indexes = {row[1] for row in probe.execute("PRAGMA index_list(runs)")}
+        if "idx_runs_status" in run_indexes:
+            return "20241226_000001"
+        return LEGACY_BASELINE_REVISION
+    finally:
+        probe.close()
+
+
+def _alembic_config(database_path: str | Path):
+    from alembic.config import Config
+
+    project_root = Path(__file__).parent.parent.parent
+    alembic_cfg_path = project_root / "alembic.ini"
+    if not alembic_cfg_path.exists():
+        raise FileNotFoundError(f"alembic.ini not found at {alembic_cfg_path}")
+    alembic_cfg = Config(str(alembic_cfg_path))
+    alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{Path(database_path)}")
+    return alembic_cfg
+
+
+def upgrade_database_to_head(database_path: str | Path) -> bool:
+    """Classify, baseline, and upgrade a database without unsafe head stamps."""
+    try:
+        from alembic.command import stamp, upgrade
+
+        baseline = classify_legacy_baseline(database_path)
+        if baseline is None:
+            logger.error("Refusing Alembic upgrade for unrecognized database schema at %s", database_path)
+            return False
+        config = _alembic_config(database_path)
+        if baseline != "stamped":
+            logger.info("Stamping supported legacy schema at %s", baseline)
+            stamp(config, baseline)
+        upgrade(config, "head")
+        if not _has_current_schema(database_path):
+            logger.error("Alembic reported success but required v3 schema is missing at %s", database_path)
+            return False
+        logger.info("Database migrations completed successfully")
+        return True
     except ImportError:
-        # Alembic not installed, skip
-        logger.debug("Alembic not available, skipping version stamp")
-    except Exception as e:
-        logger.warning("Failed to check/stamp Alembic version: %s", e)
+        logger.warning("Alembic not installed, cannot run migrations")
+        return False
+    except Exception as exc:
+        logger.error("Database schema upgrade failed: %s", exc)
+        return False
+
+
+def _has_current_schema(database_path: str | Path) -> bool:
+    """Verify the columns that make a head stamp meaningful for v3 data."""
+    probe = create_engine(f"sqlite:///{Path(database_path)}", future=True)
+    try:
+        inspector = inspect(probe)
+        tables = set(inspector.get_table_names())
+        if not {"config", "runs", "file_events", "alembic_version"}.issubset(tables):
+            return False
+        config_columns = {item["name"] for item in inspector.get_columns("config")}
+        run_columns = {item["name"] for item in inspector.get_columns("runs")}
+        if "provenance" not in config_columns or "message" not in run_columns:
+            return False
+        canonical_statuses = {"pending", "running", "completed", "failed", "aborted", "skipped"}
+        with probe.connect() as connection:
+            statuses = {str(row[0]).lower() for row in connection.execute(text("SELECT DISTINCT status FROM runs")) if row[0]}
+            revisions = [row[0] for row in connection.execute(text("SELECT version_num FROM alembic_version"))]
+        if not statuses.issubset(canonical_statuses) or len(revisions) != 1:
+            return False
+        from alembic.script import ScriptDirectory
+        return revisions[0] == ScriptDirectory.from_config(_alembic_config(database_path)).get_current_head()
+    finally:
+        probe.dispose()
 
 
 def stamp_database_head() -> bool:
@@ -109,24 +246,9 @@ def stamp_database_head() -> bool:
         True if successful, False otherwise.
     """
     try:
-        from alembic import command
-        from alembic.config import Config
-
-        # Find alembic.ini relative to this file's location
-        project_root = Path(__file__).parent.parent.parent
-        alembic_cfg_path = project_root / "alembic.ini"
-
-        if not alembic_cfg_path.exists():
-            logger.warning("alembic.ini not found at %s", alembic_cfg_path)
-            return False
-
-        alembic_cfg = Config(str(alembic_cfg_path))
-        alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
-        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
-
-        command.stamp(alembic_cfg, "head")
-        logger.info("Database stamped with Alembic head revision")
-        return True
+        # Kept for external callers, but intentionally no longer stamps an
+        # arbitrary database to head.
+        return upgrade_database_to_head(DB_PATH)
 
     except ImportError:
         logger.warning("Alembic not installed, cannot stamp database")
@@ -142,31 +264,7 @@ def run_migrations() -> bool:
     Returns:
         True if successful, False otherwise.
     """
-    try:
-        from alembic import command
-        from alembic.config import Config
-
-        project_root = Path(__file__).parent.parent.parent
-        alembic_cfg_path = project_root / "alembic.ini"
-
-        if not alembic_cfg_path.exists():
-            logger.warning("alembic.ini not found at %s", alembic_cfg_path)
-            return False
-
-        alembic_cfg = Config(str(alembic_cfg_path))
-        alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
-        alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
-
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Database migrations completed successfully")
-        return True
-
-    except ImportError:
-        logger.warning("Alembic not installed, cannot run migrations")
-        return False
-    except Exception as e:
-        logger.error("Failed to run migrations: %s", e)
-        return False
+    return upgrade_database_to_head(DB_PATH)
 
 
 def get_db() -> Generator[Session, None, None]:

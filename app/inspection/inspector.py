@@ -8,17 +8,13 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Sequence, Union
 
 from ..configuration.models import GoogleDriveSourceDraft, NextcloudDestinationDraft
 from ..configuration.stores import redact_secrets
 from .exceptions import (
-    InspectionAuthError,
-    InspectionError,
-    InspectionNetworkError,
     InspectionTimeoutError,
     InspectionValidationError,
     UnsupportedEndpointError,
@@ -90,7 +86,7 @@ class EndpointInspector:
         args: List[str],
         config_path: Path,
         timeout: Optional[float] = None,
-        secrets: Optional[List[Optional[str]]] = None,
+        secrets: Optional[Sequence[Optional[str]]] = None,
     ) -> tuple[int, str, str]:
         """Execute rclone subprocess safely and asynchronously with bounded timeouts and redaction."""
         effective_timeout = timeout or self._default_timeout
@@ -141,13 +137,17 @@ class EndpointInspector:
     # --- Connection testing ---
 
     async def test_connection(
-        self, endpoint: Union[str, EndpointConcept], timeout: Optional[float] = None
+        self,
+        endpoint: Union[str, EndpointConcept],
+        timeout: Optional[float] = None,
+        config_path: Optional[Path] = None,
     ) -> ConnectionTestResult:
         """Test connection to fixed endpoint without modifying configuration or data."""
         remote = self._validate_endpoint(endpoint)
         start_time = time.monotonic()
 
-        if not self._rclone_conf.exists():
+        active_config = Path(config_path) if config_path is not None else self._rclone_conf
+        if not active_config.exists():
             return ConnectionTestResult(
                 success=False,
                 endpoint=remote,
@@ -159,7 +159,7 @@ class EndpointInspector:
 
         try:
             retcode, stdout, stderr = await self._run_rclone(
-                cmd_args, self._rclone_conf, timeout=timeout
+                cmd_args, active_config, timeout=timeout
             )
             duration_ms = round((time.monotonic() - start_time) * 1000, 2)
 
@@ -176,7 +176,7 @@ class EndpointInspector:
             return ConnectionTestResult(
                 success=False,
                 endpoint=remote,
-                message=f"Connection failed: {err_msg}",
+                message=f"{remote} connection failed ({category})",
                 duration_ms=duration_ms,
                 error_category=category,
             )
@@ -189,13 +189,93 @@ class EndpointInspector:
                 duration_ms=duration_ms,
                 error_category="timeout",
             )
-        except Exception as exc:
+        except Exception:
             duration_ms = round((time.monotonic() - start_time) * 1000, 2)
             return ConnectionTestResult(
                 success=False,
                 endpoint=remote,
-                message=f"Connection error: {exc}",
+                message=f"{remote} connection inspection failed",
                 duration_ms=duration_ms,
+                error_category="unknown",
+            )
+
+    async def probe_path(
+        self,
+        endpoint: Union[str, EndpointConcept],
+        path: str,
+        timeout: Optional[float] = None,
+        config_path: Optional[Path] = None,
+    ) -> ConnectionTestResult:
+        """Check access to a selected folder without listing its contents to callers.
+
+        A successful remote-root check does not prove that the configured sync
+        folder exists. ``lsjson --stat`` checks the selected folder itself,
+        including an empty folder, without enumerating its contents.
+        """
+        remote = self._validate_endpoint(endpoint)
+        clean_path = self._validate_path(path)
+        if not clean_path and not path.strip():
+            return ConnectionTestResult(
+                success=False,
+                endpoint=remote,
+                message=f"{remote} selected path is not configured",
+                error_category="unconfigured",
+            )
+        active_config = Path(config_path) if config_path is not None else self._rclone_conf
+        if not active_config.exists():
+            return ConnectionTestResult(
+                success=False,
+                endpoint=remote,
+                message=f"{remote} configuration is unavailable",
+                error_category="unconfigured",
+            )
+        started = time.monotonic()
+        args = ["lsjson", f"{remote}:{clean_path}", "--stat"]
+        if remote == "gdrive":
+            args.append("--drive-chunk-size=64M")
+        try:
+            code, stdout, stderr = await self._run_rclone(args, active_config, timeout=timeout)
+            elapsed = round((time.monotonic() - started) * 1000, 2)
+            if code == 0:
+                try:
+                    item = json.loads(stdout)
+                except (TypeError, ValueError):
+                    item = None
+                if not isinstance(item, dict) or item.get("IsDir") is not True:
+                    return ConnectionTestResult(
+                        success=False,
+                        endpoint=remote,
+                        message=f"{remote} selected path is not an accessible folder",
+                        duration_ms=elapsed,
+                        error_category="not_directory",
+                    )
+                return ConnectionTestResult(
+                    success=True,
+                    endpoint=remote,
+                    message=f"{remote} selected path is accessible",
+                    duration_ms=elapsed,
+                )
+            category = _classify_error(stderr or stdout)
+            return ConnectionTestResult(
+                success=False,
+                endpoint=remote,
+                message=f"{remote} selected path is unavailable ({category})",
+                duration_ms=elapsed,
+                error_category=category,
+            )
+        except InspectionTimeoutError:
+            return ConnectionTestResult(
+                success=False,
+                endpoint=remote,
+                message=f"{remote} selected path inspection timed out",
+                error_category="timeout",
+            )
+        except Exception:
+            logger.error("Selected-path inspection failed for %s", remote)
+            return ConnectionTestResult(
+                success=False,
+                endpoint=remote,
+                message=f"{remote} selected path inspection failed",
                 error_category="unknown",
             )
 
@@ -209,7 +289,7 @@ class EndpointInspector:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_conf = Path(tmpdir) / "rclone.conf"
             cp = configparser.RawConfigParser(interpolation=None)
-            cp.optionxform = str
+            setattr(cp, "optionxform", str)
             cp.add_section("gdrive")
             cp.set("gdrive", "type", "drive")
             cp.set("gdrive", "scope", draft.scope)
