@@ -140,9 +140,15 @@ def _online_sqlite_backup(source: Path, target: Path) -> None:
 def _inventory(payload: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     for item in sorted(payload.rglob("*")):
-        if item.is_file():
+        if item.is_file() and _include_archive_member(item.relative_to(payload).as_posix()):
             result[item.relative_to(payload).as_posix()] = _sha256(item)
     return result
+
+
+def _include_archive_member(name: str) -> bool:
+    """Keep the inventory and archive's Python-cache exclusion identical."""
+    path = PurePosixPath(name)
+    return "__pycache__" not in path.parts and not name.endswith(".pyc")
 
 
 def _required_present(payload: Path) -> None:
@@ -240,7 +246,7 @@ def create_recovery_bundle(
 
 
 def _tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
-    if "__pycache__" in PurePosixPath(info.name).parts or info.name.endswith(".pyc"):
+    if not _include_archive_member(info.name):
         return None
     info.uid = info.gid = 0
     info.uname = info.gname = ""

@@ -174,6 +174,7 @@ def main() -> int:
                 return False
             return command_ok(["systemctl", "daemon-reload"])
 
+        print("Creating and verifying the recovery bundle; this may take several minutes. Services stay online until it completes.", flush=True)
         result = run_update_transaction(
             release_dir,
             args.install_dir,
