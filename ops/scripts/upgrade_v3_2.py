@@ -17,7 +17,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.request import ProxyHandler, Request, build_opener
 
 
@@ -54,14 +54,37 @@ def extract_checked_archive(archive_path: Path, expected_sha256: str, destinatio
         raise SystemExit("release archive SHA-256 does not match the supplied checksum")
     with tarfile.open(archive_path, "r:gz") as archive:
         members = archive.getmembers()
-        roots = {Path(member.name).parts[0] for member in members if member.name}
+        roots: set[str] = set()
+        names: set[str] = set()
+        for member in members:
+            path = PurePosixPath(member.name)
+            if (
+                not member.name
+                or path.is_absolute()
+                or ".." in path.parts
+                or not path.parts
+                or not (member.isdir() or member.isfile())
+            ):
+                raise SystemExit(f"unsafe release archive member: {member.name}")
+            canonical_name = path.as_posix()
+            if canonical_name in names:
+                raise SystemExit(f"duplicate release archive member: {member.name}")
+            names.add(canonical_name)
+            roots.add(path.parts[0])
         if len(roots) != 1:
             raise SystemExit("release archive must contain exactly one top-level directory")
         for member in members:
-            path = Path(member.name)
-            if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk() or member.isdev() or member.isfifo():
-                raise SystemExit(f"unsafe release archive member: {member.name}")
-        archive.extractall(destination, filter="data")
+            target = destination.joinpath(*PurePosixPath(member.name).parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise SystemExit(f"unreadable release archive member: {member.name}")
+            with source, target.open("xb") as output:
+                shutil.copyfileobj(source, output)
+            os.chmod(target, member.mode & 0o755 or 0o600)
     return destination / next(iter(roots))
 
 

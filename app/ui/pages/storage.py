@@ -23,8 +23,8 @@ render_hero_bar(api)
 
 # Fetch current configuration
 paths = api.get_sync_paths() or {}
-gdrive_src = paths.get("gdrive_src") or "/"
-nc_dest_path = paths.get("nc_dest_path") or "/"
+gdrive_src = paths.get("gdrive_src") or ""
+nc_dest_path = paths.get("nc_dest_path") or ""
 current_route_paths = {"gdrive_src": gdrive_src, "nc_dest_path": nc_dest_path}
 
 # 1. Global Endpoint Verification Action
@@ -63,7 +63,7 @@ col_gd, col_nc = st.columns(2)
 with col_gd.container(border=True):
     st.markdown("### 📁 Google Drive Source")
     st.markdown("**Target Remote**: `gdrive`")
-    st.markdown(f"**Source Root Path**: `{gdrive_src}`")
+    st.markdown(f"**Source Root Path**: `{gdrive_src or 'Not configured'}`")
 
     gd_endpoint_status = api.get_google_drive_endpoint_status()
     is_gd_configured = bool(gd_endpoint_status and gd_endpoint_status.configured)
@@ -138,7 +138,7 @@ with col_gd.container(border=True):
 with col_nc.container(border=True):
     st.markdown("### ☁️ Nextcloud Destination")
     st.markdown("**Target Remote**: `ncwebdav`")
-    st.markdown(f"**Destination Path**: `{nc_dest_path}`")
+    st.markdown(f"**Destination Path**: `{nc_dest_path or 'Not configured'}`")
 
     nc_endpoint_status = api.get_nextcloud_endpoint_status()
     is_nc_configured = bool(nc_endpoint_status and nc_endpoint_status.configured)
@@ -202,8 +202,8 @@ with st.expander("🛠️ Advanced: Modify Sync Paths & Folder Browser", expande
         if save_paths_btn:
             # Q8=B: Save directly to SQLite
             upd_res = api.update_sync_paths({
-                "gdrive_src": new_gdrive_src.strip() or "/",
-                "nc_dest_path": new_nc_dest.strip() or "/",
+                "gdrive_src": new_gdrive_src.strip(),
+                "nc_dest_path": new_nc_dest.strip(),
             })
             if upd_res and upd_res.get("success"):
                 st.session_state.pop("route_verification", None)

@@ -214,7 +214,7 @@ class EndpointInspector:
         """
         remote = self._validate_endpoint(endpoint)
         clean_path = self._validate_path(path)
-        if not clean_path:
+        if not clean_path and not path.strip():
             return ConnectionTestResult(
                 success=False,
                 endpoint=remote,

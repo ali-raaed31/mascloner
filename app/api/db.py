@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator
@@ -71,7 +72,19 @@ def init_db() -> None:
     Use Alembic for schema migrations after initial creation.
     """
     try:
-        table_names = set(inspect(engine).get_table_names())
+        database_file = Path(DB_PATH)
+        if database_file.is_file():
+            probe = sqlite3.connect(database_file.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                probe.execute("PRAGMA query_only=ON")
+                table_names = {
+                    row[0]
+                    for row in probe.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+            finally:
+                probe.close()
+        else:
+            table_names = set()
         # A database which contains unrelated tables is an existing database,
         # not a fresh MasCloner installation.  It must pass classification
         # below instead of being silently mixed with a new schema.
@@ -108,17 +121,17 @@ def classify_legacy_baseline(database_path: str | Path) -> str | None:
         return None
     # Classification must remain read-only, including on an unknown database;
     # the normal application engine enables WAL and would mutate its header.
-    probe = create_engine(f"sqlite:///{candidate}", future=True)
+    probe = sqlite3.connect(candidate.resolve().as_uri() + "?mode=ro", uri=True)
     try:
-        inspector = inspect(probe)
-        tables = set(inspector.get_table_names())
+        probe.execute("PRAGMA query_only=ON")
+        tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if "alembic_version" in tables:
             return "stamped"
         required_tables = {"config", "runs", "file_events"}
         if not required_tables.issubset(tables):
             return None
-        config_columns = {item["name"] for item in inspector.get_columns("config")}
-        run_columns = {item["name"] for item in inspector.get_columns("runs")}
+        config_columns = {row[1] for row in probe.execute("PRAGMA table_info(config)")}
+        run_columns = {row[1] for row in probe.execute("PRAGMA table_info(runs)")}
         required_config = {"key", "value", "updated_at"}
         required_runs = {
             "id", "started_at", "finished_at", "status", "num_added",
@@ -137,13 +150,12 @@ def classify_legacy_baseline(database_path: str | Path) -> str | None:
                 "id", "run_id", "timestamp", "action", "file_path",
                 "file_size", "file_hash", "message",
             }
-            event_columns = {item["name"] for item in inspector.get_columns("file_events")}
-            with probe.connect() as connection:
-                statuses = {
-                    str(row[0]).lower()
-                    for row in connection.execute(text("SELECT DISTINCT status FROM runs"))
-                    if row[0]
-                }
+            event_columns = {row[1] for row in probe.execute("PRAGMA table_info(file_events)")}
+            statuses = {
+                str(row[0]).lower()
+                for row in probe.execute("SELECT DISTINCT status FROM runs")
+                if row[0]
+            }
             canonical = {"pending", "running", "completed", "failed", "aborted", "skipped"}
             if (
                 config_columns == expected_config
@@ -153,12 +165,12 @@ def classify_legacy_baseline(database_path: str | Path) -> str | None:
             ):
                 return "head"
             return None
-        run_indexes = {item["name"] for item in inspector.get_indexes("runs")}
+        run_indexes = {row[1] for row in probe.execute("PRAGMA index_list(runs)")}
         if "idx_runs_status" in run_indexes:
             return "20241226_000001"
         return LEGACY_BASELINE_REVISION
     finally:
-        probe.dispose()
+        probe.close()
 
 
 def _alembic_config(database_path: str | Path):

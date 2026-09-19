@@ -59,6 +59,8 @@ class ConfigRequest(BaseModel):
         segments = [seg for seg in stripped.replace("\\", "/").split("/") if seg]
         if ".." in segments:
             raise ValueError("Path traversal segments (..) are not allowed")
+        if stripped and not segments:
+            return "/"
         return "/".join(segments)
 
 

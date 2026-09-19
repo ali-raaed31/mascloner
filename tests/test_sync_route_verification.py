@@ -59,6 +59,11 @@ def test_selected_route_success_and_unconfigured_path() -> None:
             assert client.post("/config/paths/verify").json()["success"] is True
             assert installation.rclone_conf_path.read_bytes() == original_config
 
+            configuration.set_sync_paths({"gdrive_src": "/", "nc_dest_path": "/"})
+            assert configuration.get_sync_paths().gdrive_src == "/"
+            assert configuration.get_sync_paths().nc_dest_path == "/"
+            assert client.post("/config/paths/verify").json()["success"] is True
+
             configuration.set_sync_paths(
                 {"gdrive_src": "", "nc_dest_path": "SelectedDestination"}
             )

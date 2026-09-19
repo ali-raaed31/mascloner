@@ -157,6 +157,29 @@ def test_legacy_updater_characterization_uses_default_branch_and_omits_root_meta
     assert '"VERSION"' not in legacy_update_code
 
 
+def test_shell_update_entrypoint_only_dispatches_to_verified_cli(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "ops/scripts/update.sh"
+    install = tmp_path / "install"
+    install.mkdir()
+    environment = dict(os.environ, INSTALL_DIR=str(install), MASCLONER_RELEASE_DIR=str(tmp_path / "release"))
+
+    missing_cli = subprocess.run(["bash", str(script)], env=environment, capture_output=True, text=True)
+    assert missing_cli.returncode != 0
+    assert "verified" in missing_cli.stderr
+    assert list(install.iterdir()) == []
+
+    _write(install / "ops/cli/main.py", "")
+    python = install / ".venv/bin/python"
+    marker = tmp_path / "invocation.txt"
+    _write(python, f'#!/bin/sh\nprintf "%s\\n" "$*" > "{marker}"\n')
+    python.chmod(0o700)
+    dispatched = subprocess.run(
+        ["bash", str(script), "--check-only"], env=environment, capture_output=True, text=True
+    )
+    assert dispatched.returncode == 0
+    assert marker.read_text(encoding="utf-8").strip() == "-m ops.cli.main update --check-only"
+
+
 def test_update_failure_restores_the_pre_update_bundle(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
     release = _release(tmp_path / "release", revision="new-revision")

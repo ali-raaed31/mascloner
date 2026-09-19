@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 
 from app.api.db import classify_legacy_baseline, upgrade_database_to_head
@@ -154,6 +155,26 @@ def test_stamped_head_with_missing_v3_columns_fails_closed(tmp_path: Path):
     assert classify_legacy_baseline(database) == "stamped"
     assert not upgrade_database_to_head(database)
     assert _digest(database) == before
+
+
+def test_init_db_rejects_unknown_existing_database_without_enabling_wal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import app.api.db as database_module
+
+    unknown = tmp_path / "unknown-startup.db"
+    with create_engine(f"sqlite:///{unknown}").begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE unrelated (value TEXT)")
+        connection.exec_driver_sql("INSERT INTO unrelated VALUES ('keep')")
+    before = _digest(unknown)
+    monkeypatch.setattr(database_module, "DB_PATH", str(unknown))
+
+    with pytest.raises(RuntimeError, match="schema upgrade failed"):
+        database_module.init_db()
+
+    assert _digest(unknown) == before
+    assert not unknown.with_name(unknown.name + "-wal").exists()
+    assert not unknown.with_name(unknown.name + "-shm").exists()
 
 
 def test_migration_service_resolves_relative_bootstrap_paths_from_base(

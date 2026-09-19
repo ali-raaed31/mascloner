@@ -116,8 +116,8 @@ st.divider()
 
 # 4. Active Sync Route & Endpoint Verification Card
 paths = api.get_sync_paths() or {}
-gdrive_src = paths.get("gdrive_src") or "/"
-nc_dest_path = paths.get("nc_dest_path") or "/"
+gdrive_src = paths.get("gdrive_src") or ""
+nc_dest_path = paths.get("nc_dest_path") or ""
 current_route_paths = {"gdrive_src": gdrive_src, "nc_dest_path": nc_dest_path}
 
 route_col_header, route_col_action = st.columns([3, 1])
@@ -151,7 +151,7 @@ card_col1, card_col2 = st.columns(2)
 with card_col1:
     with st.container(border=True):
         st.markdown("#### 📁 Google Drive Source")
-        st.markdown(f"**Path**: `{gdrive_src}`")
+        st.markdown(f"**Path**: `{gdrive_src or 'Not configured'}`")
         st.markdown("**Remote Target**: `gdrive:`")
         if verification:
             source = verification["source"]
@@ -169,7 +169,7 @@ with card_col1:
 with card_col2:
     with st.container(border=True):
         st.markdown("#### ☁️ Nextcloud Destination")
-        st.markdown(f"**Path**: `{nc_dest_path}`")
+        st.markdown(f"**Path**: `{nc_dest_path or 'Not configured'}`")
         st.markdown("**Remote Target**: `ncwebdav:`")
         if verification:
             destination = verification["destination"]

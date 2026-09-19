@@ -39,27 +39,21 @@ A beautiful, feature-rich command-line interface for managing MasCloner, built w
 ### Update MasCloner
 
 ```bash
-# Interactive update with confirmation
-sudo mascloner update
+release_archive=/path/to/qualified-release.tar.gz
+release_sha256=REPLACE_WITH_PUBLISHED_SHA256
 
-# Skip confirmation prompts
-sudo mascloner update --yes
+# Validate the release and installed Python without changing the installation
+sudo env MASCLONER_RELEASE_ARCHIVE="$release_archive" \
+  MASCLONER_RELEASE_SHA256="$release_sha256" mascloner update --check-only
 
-# Check for updates without installing
-sudo mascloner update --check-only
-
-# Skip backup (not recommended)
-sudo mascloner update --skip-backup
-
-# Only update systemd services
-sudo mascloner update --services-only
-
-# Only update dependencies
-sudo mascloner update --deps-only
-
-# Show what would be done (no changes)
-sudo mascloner update --dry-run
+# Install the complete release with a verified recovery bundle
+sudo env MASCLONER_RELEASE_ARCHIVE="$release_archive" \
+  MASCLONER_RELEASE_SHA256="$release_sha256" mascloner update --yes
 ```
+
+The `--skip-backup`, `--services-only`, and `--deps-only` flags are rejected for
+verified updates. An installation still at `7f22b48` needs the one-time bridge
+in [the v3.2.0 upgrade guide](../../docs/releases/v3.2.0.md) first.
 
 ### Check Status
 
@@ -180,12 +174,12 @@ Installation: /srv/mascloner
 
 ## Fallback Mode
 
-If the modern CLI is not available, the `mascloner` command automatically falls back to legacy bash scripts:
+If the modern CLI is missing, the wrapper can still run the legacy status
+check. Updates fail without changing files and direct the operator to the
+verified bridge:
 
-- `mascloner update` → `ops/scripts/update.sh`
+- `mascloner update` → `ops/scripts/update.sh` → fails safely without the CLI
 - `mascloner status` → `ops/scripts/health-check.sh`
-
-This ensures the command always works, even during migration.
 
 ## Development
 
@@ -235,16 +229,9 @@ sudo -u mascloner /srv/mascloner/.venv/bin/pip install -r /srv/mascloner/require
 
 ## Migration from Bash Scripts
 
-The new CLI coexists with the old bash scripts:
-
-- **Old:** `sudo bash /srv/mascloner/ops/scripts/update.sh`
-- **New:** `sudo mascloner update`
-
-Both work, but the new CLI provides:
-- Better user experience
-- More features
-- Easier maintenance
-- Better error handling
+On v3.2.0 and later, `ops/scripts/update.sh` forwards to the same verified CLI
+updater. The old clone-based script in an installed v3.0 release cannot be
+changed retroactively; use the one-time bridge before invoking the v3.2 CLI.
 
 ## License
 
