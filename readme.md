@@ -241,9 +241,18 @@ Do not rely on backups stored on the same VM disk for disaster recovery. Keep a 
 
 ### Updates
 
+An installation at `7f22b48` must first use the checksum-verified one-time
+bridge in [the v3.2.0 upgrade guide](docs/releases/v3.2.0.md). Do not run its
+installed `mascloner update` command for that first upgrade.
+
+For v3.2.0 and later, supply a qualified release archive and its published
+SHA-256 to the verified CLI updater. The installed `update.sh` forwards to the
+same CLI transaction and has no separate clone-based update path.
+
 ```bash
-# Automated update
-sudo bash /srv/mascloner/ops/scripts/update.sh
+sudo env MASCLONER_RELEASE_ARCHIVE=/path/to/release.tar.gz \
+  MASCLONER_RELEASE_SHA256=REPLACE_WITH_PUBLISHED_SHA256 \
+  mascloner update --yes
 ```
 
 ### Accepted Architecture Migration

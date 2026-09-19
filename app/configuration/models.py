@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -159,6 +159,8 @@ class SyncPathsSettings(BaseModel):
         segments = [seg for seg in stripped.replace("\\", "/").split("/") if seg]
         if ".." in segments:
             raise ValueError("Path traversal segments (..) are not allowed")
+        if stripped and not segments:
+            return "/"
         return "/".join(segments)
 
 
@@ -280,6 +282,8 @@ class NextcloudDestinationDraft(BaseModel):
             raise ValueError("URL must have a valid domain or hostname")
         if parsed.username or parsed.password:
             netloc = parsed.hostname
+            if not netloc:
+                raise ValueError("URL must have a valid domain or hostname")
             if parsed.port:
                 netloc = f"{netloc}:{parsed.port}"
             parsed = parsed._replace(netloc=netloc)

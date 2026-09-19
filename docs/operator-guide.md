@@ -166,11 +166,11 @@ Per [ADR 0001](file:///home/alirun/projects/cloner/docs/adr/0001-explicit-config
    mascloner migrate --apply
    ```
    The apply procedure performs the following atomic sequence:
-   - Quiesces the service and reconciles any stale non-terminal runs.
+   - Stops and confirms API/UI services, then performs read-only preflight and legacy mapping.
    - Creates a verified, timestamped recovery bundle in `/var/backups/mascloner/migration_recovery_bundle_<timestamp>/`.
-   - Migrates legacy run statuses (`success`, `error`, `stopped`, `partial`) to canonical statuses.
-   - Imports mutable schedule (`enabled=true`), sync folder paths, performance parameters, and retention settings into SQLite.
-   - Validates and establishes fixed `gdrive` and `ncwebdav` remotes in managed `rclone.conf`.
+   - Reconciles stale non-terminal runs only after the recovery bundle is verified.
+   - Validates fixed `gdrive` and `ncwebdav` remotes and both selected folders in a temporary candidate config before atomically promoting it.
+   - Migrates legacy run statuses (`success`, `error`, `stopped`, `partial`) to canonical statuses, then imports the effective schedule state, sync folder paths, complete performance parameters, and retention settings into SQLite with provenance.
    - Records cutover version (`3.0.0`) and enables daily history retention.
 
 4. **Post-Cutover Smoke Verification**:
@@ -192,7 +192,8 @@ If any unexpected failure or behavioral regression occurs post-cutover:
 mascloner migrate --rollback /var/backups/mascloner/migration_recovery_bundle_<timestamp>
 ```
 The rollback procedure:
-- Stops active processes and disposes database locks.
+- Stops and confirms API/UI services before it removes WAL/SHM or restores SQLite.
 - Restores `mascloner.db`, removing any stray WAL/SHM files.
 - Restores original `.env` and `rclone.conf`.
 - Verifies restored SQLite database integrity before completing.
+- Restarts only the services that were active before the restore.

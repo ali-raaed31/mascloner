@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import configparser
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import shutil
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-from sqlalchemy import create_engine, select, text, update
+from typing import Any, Callable, Dict, Optional
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.models import Base, ConfigKV, Run, SyncStatus
+from app.api.models import ConfigKV, Run, SyncStatus
 from app.api.scheduler import reconcile_stale_runs
+from app.api.sync_lifecycle import migrate_legacy_statuses
 from app.configuration import (
     Configuration,
-    EffectiveConfiguration,
     RclonePerformanceSettings,
     RetentionPolicySettings,
     ScheduleSettings,
@@ -67,12 +69,16 @@ class MigrationService:
         else:
             self.base_dir = Path("/srv/mascloner").resolve()
 
+        def resolve_from_base(value: str) -> Path:
+            candidate = Path(value)
+            return candidate.resolve() if candidate.is_absolute() else (self.base_dir / candidate).resolve()
+
         self.env_path = Path(env_path).resolve() if env_path else self.base_dir / ".env"
         self.db_path = (
             Path(db_path).resolve()
             if db_path
             else (
-                Path(os.environ["MASCLONER_DB_PATH"]).resolve()
+                resolve_from_base(os.environ["MASCLONER_DB_PATH"])
                 if "MASCLONER_DB_PATH" in os.environ
                 else self.base_dir / "data" / "mascloner.db"
             )
@@ -81,8 +87,8 @@ class MigrationService:
             Path(rclone_conf_path).resolve()
             if rclone_conf_path
             else (
-                Path(os.environ["MASCLONER_RCLONE_CONFIG"]).resolve()
-                if "MASCLONER_RCLONE_CONFIG" in os.environ
+                resolve_from_base(os.environ.get("MASCLONER_RCLONE_CONF", os.environ.get("MASCLONER_RCLONE_CONFIG", "")))
+                if "MASCLONER_RCLONE_CONF" in os.environ or "MASCLONER_RCLONE_CONFIG" in os.environ
                 else self.base_dir / "etc" / "rclone.conf"
             )
         )
@@ -106,11 +112,10 @@ class MigrationService:
     def run_preflight(self) -> PreflightCheckResult:
         """Run preflight health and prerequisite checks."""
         result = PreflightCheckResult()
-        details = {}
+        details: Dict[str, Any] = {}
 
         # 1. Topology check (ensure storage is local, not NFS)
         try:
-            stat_target = self.base_dir if self.base_dir.exists() else self.db_path.parent
             details["base_dir"] = str(self.base_dir)
             result.topology_ok = True
         except Exception as exc:
@@ -135,7 +140,7 @@ class MigrationService:
                 )
             else:
                 result.free_space_ok = True
-            details["free_space_mb"] = result.free_space_mb
+            details["free_space_mb"] = free_mb
         except Exception as exc:
             result.free_space_ok = False
             result.errors.append(f"Failed to check disk space: {exc}")
@@ -242,6 +247,10 @@ class MigrationService:
             "database_path": str(self.db_path),
             "env_path": str(self.env_path),
             "rclone_conf_path": str(self.rclone_conf_path),
+            # This cutover never changes application code or service units.
+            # Recovery therefore restores the complete mutable state while
+            # the CLI keeps the existing runtime stopped.
+            "runtime_state": {"code_changed": False, "services_must_remain_stopped": True},
         }
         with metadata_path.open("w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -306,43 +315,97 @@ class MigrationService:
         return inv
 
     def calculate_v3_mappings(self, inventory: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate proposed v3 configuration mappings from legacy inventory."""
+        """Calculate a validated, deterministic cutover mapping.
+
+        Nonempty SQLite values take precedence over .env.  Two different
+        nonempty values are an operator decision, never a value this process
+        guesses at.  Every imported value carries provenance for diagnostics.
+        """
         sqlite_keys = inventory.get("sqlite_keys", {})
+        env_values = self._legacy_env_values()
 
-        # Schedule: preserve continuity with enabled=True per ADR 0007 / Issue #14
-        interval_min = int(sqlite_keys.get("interval_min", 5))
-        jitter_sec = int(sqlite_keys.get("jitter_sec", 30))
+        def choose(name: str, env_key: str, aliases: tuple[str, ...], default: str) -> tuple[str, str]:
+            db_candidates = [(key, str(sqlite_keys[key]).strip()) for key in (name, *aliases) if str(sqlite_keys.get(key, "")).strip()]
+            env_value = str(env_values.get(env_key, "")).strip()
+            if len({value for _, value in db_candidates}) > 1:
+                raise ValueError(f"Conflicting legacy SQLite values for {name}")
+            db_value = db_candidates[0][1] if db_candidates else ""
+            if db_value and env_value and db_value != env_value:
+                raise ValueError(f"Conflicting nonempty SQLite and .env values for {name}; resolve before cutover")
+            if db_value:
+                return db_value, "imported_legacy"
+            if env_value:
+                return env_value, "imported_legacy"
+            return default, "default"
 
-        # Paths
-        source_path = sqlite_keys.get("gdrive_src", "")
-        dest_path = sqlite_keys.get("nc_dest_path", "")
+        def as_int(name: str, env_key: str, aliases: tuple[str, ...], default: int) -> tuple[int, str]:
+            raw, provenance = choose(name, env_key, aliases, str(default))
+            try:
+                return int(raw), provenance
+            except ValueError as exc:
+                raise ValueError(f"Invalid integer value for {name}") from exc
 
-        # Retention
-        retention_days = int(sqlite_keys.get("retention_days", 60))
+        def as_bool(name: str, env_key: str, aliases: tuple[str, ...], default: bool) -> tuple[bool, str]:
+            raw, provenance = choose(name, env_key, aliases, "true" if default else "false")
+            normalized = raw.lower()
+            if normalized not in {"true", "false", "1", "0", "yes", "no"}:
+                raise ValueError(f"Invalid boolean value for {name}")
+            return normalized in {"true", "1", "yes"}, provenance
 
-        # Performance
-        transfers = int(sqlite_keys.get("rclone_transfers", 4))
-        checkers = int(sqlite_keys.get("rclone_checkers", 8))
+        source_path, source_provenance = choose("gdrive_src", "GDRIVE_SRC", (), "")
+        destination_path, destination_provenance = choose("nc_dest_path", "NC_DEST_PATH", (), "")
+        if not source_path or not destination_path:
+            raise ValueError("Both GDRIVE_SRC and NC_DEST_PATH must be nonempty before cutover")
 
+        enabled, enabled_provenance = as_bool("schedule_enabled", "SCHEDULE_ENABLED", (), True)
+        interval, interval_provenance = as_int("interval_min", "SYNC_INTERVAL_MIN", (), 5)
+        jitter, jitter_provenance = as_int("jitter_sec", "SYNC_JITTER_SEC", (), 20)
+        retention, retention_provenance = as_int("retention_days", "RETENTION_DAYS", (), 60)
+        transfers, transfers_provenance = as_int("transfers", "RCLONE_TRANSFERS", ("rclone_transfers",), 4)
+        checkers, checkers_provenance = as_int("checkers", "RCLONE_CHECKERS", ("rclone_checkers",), 8)
+        tpslimit, tpslimit_provenance = as_int("tpslimit", "RCLONE_TPSLIMIT", ("rclone_tpslimit",), 10)
+        burst, burst_provenance = as_int("tpslimit_burst", "RCLONE_TPSLIMIT_BURST", ("rclone_tpslimit_burst",), 1)
+        buffer_size, buffer_provenance = choose("buffer_size", "RCLONE_BUFFER_SIZE", ("rclone_buffer_size",), "32Mi")
+        chunk_size, chunk_provenance = choose("drive_chunk_size", "RCLONE_DRIVE_CHUNK_SIZE", ("rclone_drive_chunk_size",), "64M")
+        cutoff, cutoff_provenance = choose("drive_upload_cutoff", "RCLONE_DRIVE_UPLOAD_CUTOFF", ("rclone_drive_upload_cutoff",), "128M")
+        fast_list, fast_list_provenance = as_bool("fast_list", "RCLONE_FAST_LIST", ("rclone_fast_list",), False)
+
+        schedule = ScheduleSettings(enabled=enabled, interval_min=interval, jitter_sec=jitter)
+        paths = SyncPathsSettings(gdrive_src=source_path, nc_dest_path=destination_path)
+        perf = RclonePerformanceSettings(transfers=transfers, checkers=checkers, tpslimit=tpslimit,
+            tpslimit_burst=burst, buffer_size=buffer_size, drive_chunk_size=chunk_size,
+            drive_upload_cutoff=cutoff, fast_list=fast_list)
+        retention_policy = RetentionPolicySettings(retention_days=retention)
         return {
-            "schedule": {
-                "enabled": True,
-                "interval_min": interval_min,
-                "jitter_sec": jitter_sec,
-            },
-            "sync_paths": {
-                "gdrive_src": source_path,
-                "nc_dest_path": dest_path,
-            },
-            "retention": {
-                "retention_days": retention_days,
-            },
-            "performance": {
-                "transfers": transfers,
-                "checkers": checkers,
-            },
+            "schedule": schedule.model_dump(), "sync_paths": paths.model_dump(),
+            "retention": retention_policy.model_dump(), "performance": perf.model_dump(),
+            "provenance": {"schedule_enabled": enabled_provenance, "interval_min": interval_provenance,
+                "jitter_sec": jitter_provenance, "gdrive_src": source_provenance,
+                "nc_dest_path": destination_provenance, "retention_days": retention_provenance,
+                "transfers": transfers_provenance, "checkers": checkers_provenance,
+                "tpslimit": tpslimit_provenance, "tpslimit_burst": burst_provenance,
+                "buffer_size": buffer_provenance, "drive_chunk_size": chunk_provenance,
+                "drive_upload_cutoff": cutoff_provenance, "fast_list": fast_list_provenance},
             "fixed_remotes": ["gdrive", "ncwebdav"],
         }
+
+    def _legacy_env_values(self) -> Dict[str, str]:
+        values: Dict[str, str] = {}
+        if not self.env_path.exists():
+            return values
+        for raw_line in self.env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+        return values
+
+    def _is_cutover_complete(self) -> bool:
+        if not self.db_path.exists():
+            return False
+        session_fac = self.get_session_factory()
+        with session_fac() as db:
+            return db.execute(select(ConfigKV.value).where(ConfigKV.key == "migration_version")).scalar_one_or_none() is not None
 
     def quiesce(self) -> int:
         """Quiesce the service by reconciling stale active runs."""
@@ -354,6 +417,16 @@ class MigrationService:
     ) -> MigrationReport:
         """Run the migration process according to requested mode."""
         report = MigrationReport(mode=mode)
+
+        # A recorded cutover is a terminal boundary.  This must precede
+        # preflight/quiesce so an already-live v3 installation is untouched.
+        if self._is_cutover_complete():
+            report.success = True
+            report.current_step = MigrationStep.COMPLETED
+            report.migrated_settings = {"cutover": "already complete"}
+            report.warnings.append("v3 cutover is already complete; use mascloner update or backup workflows.")
+            report.finished_at = datetime.now(timezone.utc)
+            return report
 
         # 1. Preflight
         report.current_step = MigrationStep.PREFLIGHT
@@ -368,7 +441,12 @@ class MigrationService:
         # 2. Inventory & Mapping
         report.current_step = MigrationStep.INVENTORY
         inv = self.inventory_legacy()
-        mappings = self.calculate_v3_mappings(inv)
+        try:
+            mappings = self.calculate_v3_mappings(inv)
+        except Exception as exc:
+            report.error = f"Legacy configuration cannot be safely imported: {exc}"
+            report.finished_at = datetime.now(timezone.utc)
+            return report
         report.migrated_settings = mappings
 
         # If DRY-RUN mode, prove zero mutations
@@ -395,21 +473,15 @@ class MigrationService:
             assert _compute_sha256(self.rclone_conf_path) == rclone_hash_before
             return report
 
-        # APPLY mode: Quiesce first, then verify preflight
-        report.current_step = MigrationStep.QUIESCE
-        reconciled = self.quiesce()
-        if reconciled > 0:
-            report.warnings.append(f"Reconciled {reconciled} stale run(s) before cutover")
-
-        preflight_apply = self.run_preflight()
-        report.preflight = preflight_apply
-        if not preflight_apply.is_healthy:
+        # Create the verified bundle before reconciliation or any other
+        # mutation.  A running legacy row is part of the state we promise to
+        # restore if cutover later fails.
+        if not self._preflight_allows_backup(preflight):
             report.success = False
-            report.error = f"Preflight checks failed: {'; '.join(preflight_apply.errors)}"
+            report.error = f"Preflight checks failed: {'; '.join(preflight.errors)}"
             report.finished_at = datetime.now(timezone.utc)
             return report
 
-        # 4. Backup (create verified recovery bundle)
         report.current_step = MigrationStep.BACKUP
         try:
             bundle = self.create_recovery_bundle()
@@ -420,114 +492,154 @@ class MigrationService:
             report.finished_at = datetime.now(timezone.utc)
             return report
 
-        # 5. Schema & Status Migration
-        report.current_step = MigrationStep.SCHEMA_MIGRATE
+        # Quiesce only after a verified pre-mutation bundle exists.
+        try:
+            report.current_step = MigrationStep.QUIESCE
+            reconciled = self.quiesce()
+            if reconciled > 0:
+                report.warnings.append(f"Reconciled {reconciled} stale run(s) before cutover")
+
+            preflight_apply = self.run_preflight()
+            report.preflight = preflight_apply
+            if not preflight_apply.is_healthy:
+                raise RuntimeError(f"Preflight checks failed after quiesce: {'; '.join(preflight_apply.errors)}")
+        except Exception as exc:
+            report.error = f"Cutover failed: {exc}"
+            rollback = self.rollback(Path(bundle.bundle_dir), services_stopped=True)
+            report.resumable_boundary = "restored recovery bundle" if rollback.success else "services must remain stopped; restore recovery bundle manually"
+            if not rollback.success:
+                report.error = f"{report.error}; automatic recovery failed: {rollback.error}"
+            report.finished_at = datetime.now(timezone.utc)
+            return report
+
         session_fac = self.get_session_factory()
-        with session_fac() as db:
-            # Map legacy statuses to canonical terminal statuses
-            db.execute(
-                update(Run)
-                .where(Run.status == "success")
-                .values(status=SyncStatus.COMPLETED)
-            )
-            db.execute(
-                update(Run)
-                .where(Run.status == "error")
-                .values(status=SyncStatus.FAILED)
-            )
-            db.execute(
-                update(Run)
-                .where(Run.status == "stopped")
-                .values(status=SyncStatus.ABORTED)
-            )
-            db.execute(
-                update(Run)
-                .where(Run.status == "partial")
-                .values(status=SyncStatus.COMPLETED)
-            )
-            db.commit()
+        cfg = Configuration(base_dir=self.base_dir, env_path=self.env_path,
+            db_session_factory=session_fac, rclone_conf_path=self.rclone_conf_path)
+        candidate_path: Optional[Path] = None
+        try:
+            # 5. Build and validate a candidate config before changing the
+            # managed remote file or SQLite-owned settings.
+            report.current_step = MigrationStep.VALIDATE_ENDPOINTS
+            candidate_path = self._stage_candidate_remotes()
+            inspector = EndpointInspector(rclone_conf_path=self.rclone_conf_path)
+            for endpoint, selected_path in (("gdrive", mappings["sync_paths"]["gdrive_src"]),
+                                            ("ncwebdav", mappings["sync_paths"]["nc_dest_path"])):
+                connected = asyncio.run(inspector.test_connection(endpoint, config_path=candidate_path))
+                accessible = asyncio.run(inspector.probe_path(endpoint, selected_path, config_path=candidate_path))
+                if not connected.success or not accessible.success:
+                    raise RuntimeError(f"{endpoint} validation failed: {connected.message if not connected.success else accessible.message}")
+                report.endpoints_validated.append(endpoint)
 
-        # 6. Import mutable configuration into SQLite
-        report.current_step = MigrationStep.IMPORT_CONFIG
-        cfg = Configuration(
-            base_dir=self.base_dir,
-            env_path=self.env_path,
-            db_session_factory=session_fac,
-            rclone_conf_path=self.rclone_conf_path,
-        )
+            # 6. The only mutating section is protected by the configuration
+            # lease.  Status validation is all-or-nothing via the shared map.
+            with cfg.acquire_lease(holder="v3-cutover", timeout=10.0):
+                report.current_step = MigrationStep.SCHEMA_MIGRATE
+                with session_fac() as db:
+                    migrate_legacy_statuses(db.connection())
+                    db.commit()
 
-        cfg.set_schedule(ScheduleSettings(
-            enabled=True,  # Continuity per ADR 0007 / Issue #14
-            interval_min=mappings["schedule"]["interval_min"],
-            jitter_sec=mappings["schedule"]["jitter_sec"],
-        ))
-        cfg.set_sync_paths(SyncPathsSettings(
-            gdrive_src=mappings["sync_paths"]["gdrive_src"],
-            nc_dest_path=mappings["sync_paths"]["nc_dest_path"],
-        ))
-        cfg.set_retention_policy(RetentionPolicySettings(
-            retention_days=mappings["retention"]["retention_days"],
-        ))
-        cfg.set_performance(RclonePerformanceSettings(
-            transfers=mappings["performance"]["transfers"],
-            checkers=mappings["performance"]["checkers"],
-        ))
+                report.current_step = MigrationStep.IMPORT_CONFIG
+                self._persist_mappings(session_fac, mappings)
 
-        # 7. Fixed endpoints validation and promotion
-        report.current_step = MigrationStep.VALIDATE_ENDPOINTS
-        if self.rclone_conf_path.exists():
-            parser = configparser.ConfigParser()
-            parser.read(str(self.rclone_conf_path))
+                report.current_step = MigrationStep.PROMOTE_ENDPOINTS
+                self._promote_candidate(candidate_path)
 
-            # Ensure fixed sections exist, copying legacy remote names if needed
-            changed = False
-            if "gdrive" not in parser.sections():
-                # Check for legacy remote candidates like gdrive_src or gdrive_backup
-                candidates = [s for s in parser.sections() if "drive" in s.lower()]
-                if candidates:
-                    parser.add_section("gdrive")
-                    for k, v in parser.items(candidates[0]):
-                        parser.set("gdrive", k, v)
-                    changed = True
+                report.current_step = MigrationStep.ENABLE_RETENTION
+                with session_fac() as db:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    db.merge(ConfigKV(key="migration_version", value="3.0.0", provenance="imported_legacy"))
+                    db.merge(ConfigKV(key="migration_cutover_at", value=now_iso, provenance="imported_legacy"))
+                    db.merge(ConfigKV(key="retention_enabled", value="true", provenance="imported_legacy"))
+                    db.commit()
 
-            if "ncwebdav" not in parser.sections():
-                candidates = [s for s in parser.sections() if "nc" in s.lower() or "nextcloud" in s.lower() or "webdav" in s.lower()]
-                if candidates:
-                    parser.add_section("ncwebdav")
-                    for k, v in parser.items(candidates[0]):
-                        parser.set("ncwebdav", k, v)
-                    changed = True
-
-            if changed:
-                with self.rclone_conf_path.open("w", encoding="utf-8") as f:
-                    parser.write(f)
-
-            report.endpoints_validated = [s for s in parser.sections() if s in ["gdrive", "ncwebdav"]]
-
-        # 8. Smoke test
-        report.current_step = MigrationStep.SMOKE_TEST
-        loaded_schedule = cfg.get_schedule()
-        assert loaded_schedule.enabled is True
-
-        # 9. Mark cutover and enable retention
-        report.current_step = MigrationStep.ENABLE_RETENTION
-        with session_fac() as db:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            db.merge(ConfigKV(key="migration_version", value="3.0.0"))
-            db.merge(ConfigKV(key="migration_cutover_at", value=now_iso))
-            db.merge(ConfigKV(key="retention_enabled", value="true"))
-            db.commit()
-
-        report.current_step = MigrationStep.COMPLETED
-        report.success = True
-        report.finished_at = datetime.now(timezone.utc)
+            report.current_step = MigrationStep.COMPLETED
+            report.success = True
+        except Exception as exc:
+            report.error = f"Cutover failed: {exc}"
+            # Validation is evidence for the staged candidate only.  Once a
+            # failure restores the original state, do not report endpoints as
+            # validated for the failed cutover.
+            report.endpoints_validated.clear()
+            if report.recovery_bundle:
+                rollback = self.rollback(Path(report.recovery_bundle.bundle_dir), services_stopped=True)
+                report.resumable_boundary = "restored recovery bundle" if rollback.success else "services must remain stopped; restore recovery bundle manually"
+                if not rollback.success:
+                    report.error = f"{report.error}; automatic recovery failed: {rollback.error}"
+        finally:
+            if candidate_path and candidate_path.exists():
+                candidate_path.unlink()
+            report.finished_at = datetime.now(timezone.utc)
         return report
 
-    def rollback(self, bundle_dir_or_path: Path) -> MigrationReport:
+    @staticmethod
+    def _preflight_allows_backup(preflight: PreflightCheckResult) -> bool:
+        """Allow an online recovery backup while active runs await quiescing."""
+        return (
+            preflight.topology_ok
+            and preflight.free_space_ok
+            and preflight.permissions_ok
+            and preflight.database_integrity_ok
+        )
+
+    def _stage_candidate_remotes(self) -> Path:
+        """Create a temporary fixed-remote config without touching production."""
+        if not self.rclone_conf_path.exists():
+            raise RuntimeError("Managed rclone.conf is missing")
+        parser = configparser.RawConfigParser(interpolation=None)
+        parser.read(str(self.rclone_conf_path), encoding="utf-8")
+        for fixed, predicates in {
+            "gdrive": ("drive",), "ncwebdav": ("nc", "nextcloud", "webdav"),
+        }.items():
+            if not parser.has_section(fixed):
+                source = next((name for name in parser.sections() if any(p in name.lower() for p in predicates)), None)
+                if not source:
+                    raise RuntimeError(f"No legacy remote can supply fixed endpoint {fixed}")
+                parser.add_section(fixed)
+                for key, value in parser.items(source):
+                    parser.set(fixed, key, value)
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", prefix="mascloner-cutover-", suffix=".conf", delete=False, encoding="utf-8") as handle:
+            parser.write(handle)
+            candidate = Path(handle.name)
+        os.chmod(candidate, 0o600)
+        return candidate
+
+    def _promote_candidate(self, candidate_path: Path) -> None:
+        """Atomically replace the managed rclone config with a validated candidate."""
+        self.rclone_conf_path.parent.mkdir(parents=True, exist_ok=True)
+        staging = self.rclone_conf_path.with_name(f".{self.rclone_conf_path.name}.cutover")
+        shutil.copy2(candidate_path, staging)
+        os.chmod(staging, 0o600)
+        os.replace(staging, self.rclone_conf_path)
+        os.chmod(self.rclone_conf_path, 0o600)
+
+    def _persist_mappings(self, session_fac: Callable[[], Session], mappings: Dict[str, Any]) -> None:
+        """Persist the complete typed mapping with its explicit provenance."""
+        values = {
+            "schedule_enabled": mappings["schedule"]["enabled"],
+            "interval_min": mappings["schedule"]["interval_min"],
+            "jitter_sec": mappings["schedule"]["jitter_sec"],
+            **mappings["sync_paths"], **mappings["retention"], **mappings["performance"],
+        }
+        with session_fac() as db:
+            for key, value in values.items():
+                if isinstance(value, bool):
+                    serialized = "true" if value else "false"
+                else:
+                    serialized = str(value)
+                db.merge(ConfigKV(key=key, value=serialized, provenance=mappings["provenance"][key]))
+            db.commit()
+
+    def rollback(self, bundle_dir_or_path: Path, *, services_stopped: bool = False) -> MigrationReport:
         """Rollback installation to the state in a recovery bundle."""
         import gc
         gc.collect()
         report = MigrationReport(mode=MigrationMode.ROLLBACK)
+        if not services_stopped:
+            report.success = False
+            report.error = "Rollback requires confirmed stopped MasCloner services"
+            report.finished_at = datetime.now(timezone.utc)
+            return report
         bundle_dir = Path(bundle_dir_or_path).resolve()
 
         if not bundle_dir.exists():
@@ -549,6 +661,7 @@ class MigrationService:
         try:
             # 1. Restore SQLite database
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._assert_database_restore_exclusive()
             # Remove any lingering WAL / SHM files to ensure clean restore
             for suffix in ["-wal", "-shm"]:
                 wal_file = self.db_path.with_name(self.db_path.name + suffix)
@@ -583,3 +696,21 @@ class MigrationService:
             report.error = f"Rollback failed: {exc}"
             report.finished_at = datetime.now(timezone.utc)
             return report
+
+    def _assert_database_restore_exclusive(self) -> None:
+        """Refuse restore while another SQLite transaction still holds the DB.
+
+        The CLI supplies the process-level guarantee by stopping and checking
+        MasCloner services.  This lock check closes the remaining direct-call
+        gap for held database transactions before WAL/SHM files are removed.
+        """
+        if not self.db_path.exists():
+            return
+        connection = sqlite3.connect(str(self.db_path), timeout=0)
+        try:
+            connection.execute("BEGIN EXCLUSIVE")
+            connection.execute("ROLLBACK")
+        except sqlite3.OperationalError as exc:
+            raise OnlineBackupError("Database is in use; refusing unsafe restore") from exc
+        finally:
+            connection.close()

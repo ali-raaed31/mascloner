@@ -185,7 +185,7 @@ def test_migration_apply_and_rollback_workflow(isolated_legacy_install: Installa
     engine.dispose()
 
     # 3. Test Rollback
-    rollback_report = service.rollback(bundle_dir)
+    rollback_report = service.rollback(bundle_dir, services_stopped=True)
     assert rollback_report.success is True
     assert rollback_report.current_step == MigrationStep.COMPLETED
 

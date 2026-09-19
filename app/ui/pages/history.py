@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 import streamlit as st
 
 try:
@@ -63,13 +61,7 @@ with filter_col2:
             st.rerun()
 
 status_query = None if (not status_choice or status_choice == "All Statuses") else status_choice
-raw_runs = api.get_runs(limit=limit_choice, status=status_query)
-if isinstance(raw_runs, dict):
-    runs_list = raw_runs.get("runs", [])
-elif isinstance(raw_runs, list):
-    runs_list = raw_runs
-else:
-    runs_list = []
+runs_list = api.get_recent_runs(limit=limit_choice, status=status_query) or []
 
 st.divider()
 
@@ -89,26 +81,17 @@ ACTION_ICONS = {
 
 # 2. Runs Matrix with Drilldown Expanders
 for run in runs_list:
-    run_id = run.get("id")
-    status = run.get("status", "unknown")
+    run_id = run.id
+    status = run.status
     meta = get_status_badge_meta(status)
-    started_at = run.get("started_at")
-    finished_at = run.get("finished_at")
-    bytes_trans = run.get("bytes_transferred", 0)
-    num_added = run.get("num_added", 0)
-    num_updated = run.get("num_updated", 0)
-    errors = run.get("errors", 0)
-    msg = run.get("message")
-
-    # Compute duration
-    duration_str = "-"
-    if started_at and finished_at:
-        try:
-            st_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-            fn_dt = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
-            duration_str = format_duration((fn_dt - st_dt).total_seconds())
-        except Exception:
-            duration_str = "-"
+    started_at = run.started_at
+    finished_at = run.finished_at
+    bytes_trans = run.bytes_transferred
+    num_added = run.num_added
+    num_updated = run.num_updated
+    errors = run.errors
+    msg = run.message
+    duration_str = format_duration(run.duration_seconds)
 
     header_title = f"{meta['icon']} Run #{run_id} — {meta['label']} | Started: {format_iso_time(started_at, include_relative=True)} | Transferred: {format_bytes(bytes_trans)}"
 

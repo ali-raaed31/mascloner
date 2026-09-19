@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -118,6 +119,37 @@ NC_DEST_PATH=FreshDestination
 """
         self.root_env_path.write_text(env_content, encoding="utf-8")
         self.env_file_path.write_text(env_content, encoding="utf-8")
+        return self
+
+    def create_installed_v3_0(self) -> InstallationRoot:
+        """Build the complete filesystem shape used by the pre-v3.2 updater.
+
+        It intentionally has the old commit marker and dependency pins, while
+        remaining fully contained under ``base_dir`` for updater tests.
+        """
+        self.create_fresh()
+        for relative, content in {
+            "app/__init__.py": "# legacy application\n",
+            "ops/cli/__init__.py": "# legacy CLI\n",
+            "ops/systemd/mascloner-api.service": "[Service]\nExecStart=legacy-api\n",
+            "ops/systemd/mascloner-ui.service": "[Service]\nExecStart=legacy-ui\n",
+            "ops/systemd/mascloner-tunnel.service": "[Service]\nExecStart=legacy-tunnel\n",
+            "alembic/env.py": "# legacy migrations\n",
+            "alembic.ini": "[alembic]\nscript_location = alembic\n",
+            "requirements.txt": "streamlit==1.38.0\nfastapi==0.115.0\n",
+            "VERSION": "3.0.0\n",
+            ".commit_hash": "7f22b48bd2c159d998120a39fd672e818910973a\n",
+        }.items():
+            path = self.base_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        python_path = self.base_dir / ".venv" / "bin" / "python"
+        python_path.parent.mkdir(parents=True, exist_ok=True)
+        python_path.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
+        python_path.chmod(0o700)
+        pip_path = self.base_dir / ".venv" / "bin" / "pip"
+        pip_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        pip_path.chmod(0o700)
         return self
 
     def create_legacy(

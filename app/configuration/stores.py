@@ -13,7 +13,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -52,7 +52,6 @@ from .models import (
     RclonePerformanceSettings,
     RetentionPolicySettings,
     ScheduleSettings,
-    StoreType,
     SyncPathsSettings,
 )
 
@@ -285,8 +284,12 @@ class SqliteStoreAdapter:
 
     def load_sync_paths(self) -> SyncPathsSettings:
         with self.session_factory() as session:
-            gdrive_src = self._get_kv("gdrive_src", session) or self._fallback("GDRIVE_SRC", "", session=session)
-            nc_dest_path = self._get_kv("nc_dest_path", session) or self._fallback("NC_DEST_PATH", "", session=session)
+            gdrive_src = self._get_kv("gdrive_src", session)
+            nc_dest_path = self._get_kv("nc_dest_path", session)
+            if gdrive_src is None:
+                gdrive_src = self._fallback("GDRIVE_SRC", "", session=session)
+            if nc_dest_path is None:
+                nc_dest_path = self._fallback("NC_DEST_PATH", "", session=session)
             return SyncPathsSettings(gdrive_src=gdrive_src, nc_dest_path=nc_dest_path)
 
     def save_sync_paths(self, settings: SyncPathsSettings, provenance: str = "user") -> None:
@@ -370,7 +373,7 @@ class RcloneConfStoreAdapter:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_conf_path = Path(tmpdir) / "rclone.conf"
             cp = configparser.RawConfigParser(interpolation=None)
-            cp.optionxform = str
+            setattr(cp, "optionxform", str)
             cp.add_section("gdrive")
             cp.set("gdrive", "type", "drive")
             cp.set("gdrive", "scope", draft.scope)
@@ -381,7 +384,7 @@ class RcloneConfStoreAdapter:
             if self.conf_path.exists():
                 try:
                     live_cp = configparser.RawConfigParser(interpolation=None)
-                    live_cp.optionxform = str
+                    setattr(live_cp, "optionxform", str)
                     live_cp.read(self.conf_path, encoding="utf-8")
                     if live_cp.has_section("gdrive"):
                         existing_client_id = live_cp.get("gdrive", "client_id", fallback=None)
@@ -435,7 +438,7 @@ class RcloneConfStoreAdapter:
         """
         self.conf_path.parent.mkdir(parents=True, exist_ok=True)
         parser = configparser.RawConfigParser(interpolation=None)
-        parser.optionxform = str
+        setattr(parser, "optionxform", str)
 
         if self.conf_path.exists():
             try:
@@ -612,13 +615,13 @@ class RcloneConfStoreAdapter:
                 raise ConfigurationStoreError(f"Failed to generate Nextcloud config: {redacted.strip()}")
 
             temp_parser = configparser.RawConfigParser(interpolation=None)
-            temp_parser.optionxform = str
+            setattr(temp_parser, "optionxform", str)
             temp_parser.read(tmp_conf_path, encoding="utf-8")
             if not temp_parser.has_section("ncwebdav"):
                 raise ConfigurationStoreError("Generated temporary config missing [ncwebdav] section")
 
             live_parser = configparser.RawConfigParser(interpolation=None)
-            live_parser.optionxform = str
+            setattr(live_parser, "optionxform", str)
             if self.conf_path.exists():
                 try:
                     with open(self.conf_path, "r", encoding="utf-8") as f:

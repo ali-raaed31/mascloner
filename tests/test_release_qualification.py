@@ -30,20 +30,20 @@ from tests.harness.state import ProcessStateReset
 
 
 def test_authoritative_version_surfaces():
-    """All version surfaces consistently report 3.1.0."""
+    """All version surfaces consistently report 3.2.0."""
     # App package version
-    assert app_version == "3.1.5"
+    assert app_version == "3.2.0"
 
     # CLI package version
-    assert cli_version == "3.1.5"
+    assert cli_version == "3.2.0"
 
     # FastAPI OpenAPI version
-    assert app.version == "3.1.5"
+    assert app.version == "3.2.0"
 
     # Root VERSION file
     version_file = Path(__file__).resolve().parent.parent / "VERSION"
     assert version_file.exists()
-    assert version_file.read_text().strip() == "3.1.5"
+    assert version_file.read_text().strip() == "3.2.0"
 
 
 def test_clean_install_matrix(isolated_fresh_install: InstallationRoot, fresh_client: TestClient):
@@ -128,7 +128,7 @@ def test_v2_to_v3_upgrade_and_rollback_qualification_matrix(isolated_legacy_inst
     engine.dispose()
 
     # 4. Rollback Rehearsal
-    rollback_res = service.rollback(bundle_dir)
+    rollback_res = service.rollback(bundle_dir, services_stopped=True)
     assert rollback_res.success is True
 
     # After rollback, verify database was restored to pre-migration state

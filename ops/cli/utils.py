@@ -2,8 +2,6 @@
 import os
 import shutil
 import subprocess
-import tarfile
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -161,35 +159,13 @@ def get_service_logs(service_name: str, lines: int = 20) -> List[str]:
 
 
 def create_backup(install_dir: Path, backup_dir: Path) -> Optional[Path]:
-    """
-    Create a backup of the MasCloner installation.
-    
-    Returns:
-        Path to backup file, or None if failed
-    """
-    backup_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"mascloner_pre_update_{timestamp}.tar.gz"
-    backup_path = backup_dir / backup_name
+    """Create a verified point-in-time recovery bundle for an update."""
+    from ops.cli.recovery import RecoveryBundleError, create_recovery_bundle
 
     try:
-        with tarfile.open(backup_path, "w:gz") as tar:
-            # Backup critical directories and files
-            for item in ["data", "etc", ".env", "app", "requirements.txt"]:
-                item_path = install_dir / item
-                if item_path.exists():
-                    tar.add(
-                        item_path,
-                        arcname=item,
-                        filter=lambda x: x
-                        if "__pycache__" not in x.name and not x.name.endswith(".pyc")
-                        else None,
-                    )
-
-        return backup_path
-    except Exception as e:
-        console.print(f"[red]Failed to create backup: {e}[/red]")
+        return create_recovery_bundle(install_dir, backup_dir)
+    except RecoveryBundleError as exc:
+        console.print(f"[red]Failed to create verified recovery bundle: {exc}[/red]")
         return None
 
 

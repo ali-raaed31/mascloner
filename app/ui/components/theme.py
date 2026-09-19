@@ -110,14 +110,13 @@ def render_status_pill(status_str: Optional[str]) -> str:
 
 def render_hero_bar(api_client) -> None:
     """Render the top hero operational bar across dashboard and views."""
-    status_data = api_client.get_status() or {}
     schedule_data = api_client.get_schedule() or {}
     current_run = api_client.get_current_run()
 
     is_running = bool(current_run)
     run_id = current_run.get("id") if current_run else None
     sched_enabled = schedule_data.get("enabled", False)
-    interval_minutes = schedule_data.get("interval_minutes", 15)
+    interval_minutes = schedule_data.get("interval_min", 15)
 
     col1, col2, col3, col4 = st.columns([1.2, 1.2, 1.2, 1.4])
 
@@ -140,7 +139,7 @@ def render_hero_bar(api_client) -> None:
     with col3:
         next_run_iso = schedule_data.get("next_run_time")
         if next_run_iso and sched_enabled:
-            st.markdown(f"### ⏳ Next Run")
+            st.markdown("### ⏳ Next Run")
             st.caption(format_iso_time(next_run_iso, include_relative=True))
         else:
             st.markdown("### ⏳ Next Run")

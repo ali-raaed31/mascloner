@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, func, select
@@ -14,12 +12,20 @@ from sqlalchemy.orm import Session
 
 from pydantic import ValidationError
 from ...configuration import Configuration, RclonePerformanceSettings, SyncPathsSettings, ConfigurationValidationError
-from ..config import config, ConfigManager
+from ...inspection import EndpointInspector
+from ..config import ConfigManager
 from ..db import get_db, get_db_info
 from ..dependencies import get_config, get_scheduler, get_configuration
 from ..models import ConfigKV, Run
 from ..scheduler import SyncScheduler, get_sync_config_from_db
-from ..schemas import ApiResponse, ConfigRequest, RcloneConfigRequest, StatusResponse
+from ..schemas import (
+    ApiResponse,
+    ConfigRequest,
+    RcloneConfigRequest,
+    RouteEndpointVerification,
+    StatusResponse,
+    SyncRouteVerification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +189,46 @@ async def get_sync_paths_endpoint(
 ):
     """Get current sync folder paths from SQLite."""
     return cfg_module.get_sync_paths()
+
+
+@router.post("/config/paths/verify", response_model=SyncRouteVerification)
+async def verify_sync_route(
+    cfg_module: Configuration = Depends(get_configuration),
+) -> SyncRouteVerification:
+    """Probe the persisted fixed remotes and selected folders without mutation."""
+    paths = cfg_module.get_sync_paths()
+    inspector = EndpointInspector()
+
+    async def verify_endpoint(remote: str, selected_path: str) -> RouteEndpointVerification:
+        remote_result = await inspector.test_connection(remote)
+        if not remote_result.success:
+            return RouteEndpointVerification(
+                remote_ok=False,
+                path_ok=False,
+                message=f"{remote} remote connection failed ({remote_result.error_category or 'unknown'})",
+            )
+        path_result = await inspector.probe_path(remote, selected_path)
+        if not path_result.success:
+            return RouteEndpointVerification(
+                remote_ok=True,
+                path_ok=False,
+                message=f"{remote} selected path failed ({path_result.error_category or 'unknown'})",
+            )
+        return RouteEndpointVerification(
+            remote_ok=True,
+            path_ok=True,
+            message=f"{remote} remote and selected path are accessible",
+        )
+
+    source, destination = await asyncio.gather(
+        verify_endpoint("gdrive", paths.gdrive_src),
+        verify_endpoint("ncwebdav", paths.nc_dest_path),
+    )
+    return SyncRouteVerification(
+        success=source.path_ok and destination.path_ok,
+        source=source,
+        destination=destination,
+    )
 
 
 @router.post("/config/paths", response_model=ApiResponse)

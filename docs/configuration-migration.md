@@ -1,6 +1,8 @@
 # Configuration Ownership Migration
 
-> Target migration contract. The current application does not implement this migration yet.
+> Implemented cutover contract. Installations that already contain a
+> `migration_version` marker are complete and must use the ordinary update and
+> backup workflows; never rerun `mascloner migrate --apply` on them.
 
 This migration moves a running single-VM installation from overlapping environment, database, and rclone configuration to the ownership model in ADR-0001 and ADR-0003 without invalidating working endpoints.
 
@@ -27,16 +29,16 @@ No field is authoritatively stored in more than one location. The configuration 
 2. Resolve each current setting to its new authoritative owner and reject conflicting or invalid values instead of guessing.
 3. Validate the existing GoogleDriveSource and NextcloudDestination from temporary rclone configuration.
 4. If necessary, copy the validated remotes to the fixed `gdrive` and `ncwebdav` names without deleting the originals.
-5. Write the Schedule, selected paths, rclone performance settings, and 60-day RetentionPolicy to SQLite through the typed configuration interface. When no durable enabled value exists, use `enabled=true` to preserve current behavior.
+5. Write the Schedule, selected paths, complete rclone performance settings, and RetentionPolicy to SQLite with `imported_legacy` provenance. Nonempty SQLite and `.env` values must agree; empty paths and invalid values stop the cutover.
 6. Run a read-only endpoint inspection followed by an rclone dry-run using the fixed remotes and the migrated SQLite settings.
-7. Switch the application to the new configuration module only when every validation succeeds.
+7. Atomically promote the validated candidate config under the configuration lease, then record the cutover marker only when every validation succeeds.
 8. Start the application, verify Schedule state, trigger or observe one SyncRun, and verify OAuth refresh plus Nextcloud access.
 9. Preserve legacy environment entries and old remote sections as rollback data. Do not delete them automatically.
 10. Enable daily retention only after the migration and backup checks have completed.
 
 ## Failure and rollback
 
-Any failure before the switch leaves the current configuration active. A failure after the switch restores the pre-migration application version, SQLite backup, `.env`, and `rclone.conf` together, then verifies the prior Schedule and endpoints before synchronization resumes.
+Any failure before the switch leaves the current configuration active. A failure after the recovery bundle is made restores SQLite, `.env`, and `rclone.conf` from that verified bundle while services remain stopped. Operators restart services only after the restore verification succeeds.
 
 Legacy Fernet-encrypted values are read only for compatibility during migration. New configuration is not Fernet-encrypted, and removal of the key and legacy values requires a later explicit cleanup after rollback is no longer needed.
 

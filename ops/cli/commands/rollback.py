@@ -1,7 +1,6 @@
 """Rollback command - Restore from a backup."""
-import shutil
-import tarfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,6 +20,7 @@ from ops.cli.utils import (
     start_service,
     stop_service,
 )
+from ops.cli.recovery import restore_recovery_bundle
 
 console = Console()
 
@@ -129,37 +129,21 @@ def main(
             raise typer.Exit(0)
 
     try:
-        # Stop services
-        with console.status("[bold blue]Stopping services...", spinner="dots"):
-            services = ["mascloner-api", "mascloner-ui", "mascloner-tunnel"]
-            for service in services:
-                stop_service(service)
-            time.sleep(2)
-        show_success("Services stopped")
-
-        # Extract backup
-        with console.status("[bold blue]Restoring from backup...", spinner="dots"):
-            # Extract to install directory
-            with tarfile.open(backup_path, "r:gz") as tar:
-                tar.extractall(install_dir)
-
-        show_success("Backup restored")
-
-        # Set ownership
+        # Validation is deliberately inside restore_recovery_bundle and happens
+        # before this callback stops a service or changes the installation.
         mascloner_user = get_mascloner_user()
-        with console.status("[bold blue]Setting permissions...", spinner="dots"):
-            run_command(
-                ["chown", "-R", f"{mascloner_user}:{mascloner_user}", str(install_dir)],
-                check=False,
+        with console.status("[bold blue]Validating and restoring recovery bundle...", spinner="dots"):
+            restore_recovery_bundle(
+                backup_path,
+                install_dir,
+                stop_services=_stop_all_services,
+                reload_services=_reload_systemd,
+                start_services=_start_all_services,
+                health_check=_health_check,
+                owner=mascloner_user,
             )
 
-        # Start services
-        with console.status("[bold blue]Starting services...", spinner="dots"):
-            time.sleep(2)
-            for service in ["mascloner-api", "mascloner-ui", "mascloner-tunnel"]:
-                start_service(service)
-                time.sleep(2)
-        show_success("Services started")
+        show_success("Verified recovery bundle restored and services are healthy")
 
         # Show completion
         console.print()
@@ -186,21 +170,40 @@ def main(
         raise typer.Exit(1)
 
 
+def _stop_all_services() -> bool:
+    outcomes = [stop_service(service) for service in ("mascloner-api", "mascloner-ui", "mascloner-tunnel")]
+    return all(outcomes)
+
+
+def _start_all_services() -> bool:
+    outcomes = []
+    for service in ("mascloner-api", "mascloner-ui", "mascloner-tunnel"):
+        outcomes.append(start_service(service))
+        time.sleep(0.5)
+    return all(outcomes)
+
+
+def _reload_systemd() -> bool:
+    exit_code, _, _ = run_command(["systemctl", "daemon-reload"], check=False)
+    return exit_code == 0
+
+
+def _health_check() -> bool:
+    from ops.cli.commands.update import run_health_checks
+
+    return all(passed for _, passed, _ in run_health_checks())
+
+
 def get_backup_list(backup_dir: Path) -> List[tuple[Path, str, str]]:
     """Get list of available backups with metadata."""
-    backups = []
+    backups: List[tuple[Path, str, str]] = []
 
     if not backup_dir.exists():
         return backups
 
-    for backup_file in sorted(backup_dir.glob("mascloner_*.tar.gz"), reverse=True):
+    for backup_file in sorted(backup_dir.glob("mascloner-recovery-*.tar.gz"), reverse=True):
         size = get_file_size_human(backup_file)
-        # Extract date from filename: mascloner_pre_update_20240930_123456.tar.gz
-        parts = backup_file.stem.split("_")
-        if len(parts) >= 4:
-            date_str = f"{parts[-2]} {parts[-1][:2]}:{parts[-1][2:4]}"
-        else:
-            date_str = "Unknown"
+        date_str = datetime.fromtimestamp(backup_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
 
         backups.append((backup_file, size, date_str))
 

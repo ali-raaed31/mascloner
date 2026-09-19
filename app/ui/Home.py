@@ -17,12 +17,14 @@ if str(root_dir) not in sys.path:
 if str(ui_dir) not in sys.path:
     sys.path.insert(0, str(ui_dir))
 
+from app import __version__
+
 try:
     from app.ui.api_client import APIClient
-    from app.ui.components.auth import is_auth_required, render_logout_button, require_auth
+    from app.ui.components.auth import render_logout_button, require_auth
 except ImportError:
     from api_client import APIClient
-    from components.auth import is_auth_required, render_logout_button, require_auth
+    from components.auth import render_logout_button, require_auth
 
 # Configure Streamlit page
 st.set_page_config(
@@ -33,7 +35,7 @@ st.set_page_config(
     menu_items={
         "Get Help": None,
         "Report a bug": None,
-        "About": "MasCloner v3.1.0 - Automated Google Drive to Nextcloud sync",
+        "About": f"MasCloner v{__version__} - Automated Google Drive to Nextcloud sync",
     },
 )
 
@@ -50,7 +52,7 @@ if not require_auth(api):
     st.stop()
 
 # Sidebar Branding & Global Info
-st.sidebar.markdown("## 🔄 **MasCloner** `v3.1.0`")
+st.sidebar.markdown(f"## 🔄 **MasCloner** `v{__version__}`")
 render_logout_button()
 st.sidebar.divider()
 
