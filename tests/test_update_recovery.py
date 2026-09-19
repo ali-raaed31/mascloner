@@ -68,7 +68,7 @@ def _release(root: Path, revision: str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     for relative in (".venv", "data", "etc"):
         shutil.rmtree(release / relative)
     (release / ".env").unlink()
-    _write(release / "VERSION", "3.2.2\n")
+    _write(release / "VERSION", "3.2.3\n")
     return release
 
 
@@ -78,7 +78,7 @@ def _release_manifest(root: Path, revision: str) -> None:
         for path in root.rglob("*")
         if path.is_file() and path.name != "RELEASE.json"
     }
-    _write(root / "RELEASE.json", json.dumps({"format": 1, "version": "3.2.2", "revision": revision, "inventory": inventory}))
+    _write(root / "RELEASE.json", json.dumps({"format": 1, "version": "3.2.3", "revision": revision, "inventory": inventory}))
 
 
 def test_recovery_bundle_snapshots_wal_database_and_restores_exact_runtime(tmp_path: Path) -> None:
@@ -294,7 +294,7 @@ def test_failed_pre_mutation_backup_does_not_block_a_safe_retry(tmp_path: Path, 
 def test_subsequent_verified_update_publishes_version_after_qualification(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
     release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-    _write(release / "VERSION", "3.2.2\n")
+    _write(release / "VERSION", "3.2.3\n")
     _write(release / "requirements.txt", "streamlit==1.63.0\n")
     _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     observed: list[tuple[str, str]] = []
@@ -317,7 +317,7 @@ def test_subsequent_verified_update_publishes_version_after_qualification(tmp_pa
     )
     assert observed == [("3.0.0\n", "streamlit==1.63.0\n")]
     assert result["state"] == "completed"
-    assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.2\n"
+    assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.3\n"
     assert (install / ".commit_hash").read_text(encoding="utf-8") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
 
 
@@ -429,7 +429,7 @@ def test_standalone_bridge_upgrades_7f_shaped_fixture_from_checked_archive(tmp_p
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
     _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-    archive = tmp_path / "mascloner-3.2.2.tar.gz"
+    archive = tmp_path / "mascloner-3.2.3.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(release, arcname="mascloner-release")
     bridge = project_root / "ops/scripts/upgrade_v3_2.py"
@@ -447,8 +447,8 @@ raise SystemExit(bridge.main())
 '''
     result = subprocess.run([sys.executable, "-c", invocation], capture_output=True, text=True, cwd=project_root)
     assert result.returncode == 0, result.stderr
-    assert "Installed 3.2.2 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)" in result.stdout
-    assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.2\n"
+    assert "Installed 3.2.3 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)" in result.stdout
+    assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.3\n"
     assert (install / ".commit_hash").read_text(encoding="utf-8") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
 
 
