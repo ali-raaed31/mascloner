@@ -53,7 +53,7 @@ sudo env MASCLONER_RELEASE_ARCHIVE="$release_archive" \
 
 The `--skip-backup`, `--services-only`, and `--deps-only` flags are rejected for
 verified updates. An installation still at `7f22b48` needs the one-time bridge
-in [the v3.2.1 upgrade guide](../../docs/releases/v3.2.1.md) first.
+in [the v3.2.2 upgrade guide](../../docs/releases/v3.2.2.md) first.
 
 ### Check Status
 

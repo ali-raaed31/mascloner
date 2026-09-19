@@ -1,5 +1,5 @@
 """Update command - Update MasCloner to the latest version."""
-# Version: 3.2.1
+# Version: 3.2.2
 # Last Updated: 2026-09-19
 
 import os
@@ -37,7 +37,7 @@ from ops.cli.transaction import (
 )
 
 # Version information
-UPDATE_CMD_VERSION = "3.2.1"
+UPDATE_CMD_VERSION = "3.2.2"
 UPDATE_CMD_DATE = "2026-09-19"
 
 

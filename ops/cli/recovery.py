@@ -301,18 +301,27 @@ def validate_recovery_bundle(bundle_path: Path, extract_to: Path | None = None) 
         for name, digest in manifest["inventory"].items():
             if not isinstance(name, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise RecoveryBundleError("bundle manifest has an invalid checksum entry")
-        names = {member.name for member in archive.getmembers() if member.isfile()}
+        payload_members = [
+            member for member in archive.getmembers()
+            if member.isfile() and member.name != MANIFEST_NAME
+        ]
+        names = {member.name for member in payload_members}
         expected = {f"{PAYLOAD_ROOT}/{name}" for name in manifest["inventory"]}
-        if expected != names - {MANIFEST_NAME}:
+        if expected != names:
             raise RecoveryBundleError("bundle inventory does not match archive payload")
-        for name, digest in manifest["inventory"].items():
+        # Keep reads in physical tar order. Manifest key order can differ from
+        # recursive archive order, and backward seeks in gzip restart decoding.
+        for member in payload_members:
+            name = member.name.removeprefix(f"{PAYLOAD_ROOT}/")
+            digest = manifest["inventory"][name]
             _safe_relative(name)
-            source = archive.extractfile(f"{PAYLOAD_ROOT}/{name}")
+            source = archive.extractfile(member)
             if source is None:
                 raise RecoveryBundleError(f"bundle payload is missing: {name}")
             hasher = hashlib.sha256()
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                hasher.update(chunk)
+            with source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    hasher.update(chunk)
             if hasher.hexdigest() != digest:
                 raise RecoveryBundleError(f"bundle checksum mismatch: {name}")
         for required in REQUIRED_RUNTIME_PATHS + ("data/mascloner.db", "systemd"):

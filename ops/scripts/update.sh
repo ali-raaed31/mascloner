@@ -8,7 +8,7 @@ venv_python="$install_dir/.venv/bin/python"
 if [[ ! -f "$install_dir/ops/cli/main.py" || ! -f "$venv_python" ]]; then
     printf '%s\n' \
         'A complete v3.2 CLI installation is required for this update command.' \
-        'For an installed v3.0 updater, use the checksum-verified upgrade_v3_2.py bridge described in docs/releases/v3.2.1.md.' >&2
+        'For an installed v3.0 updater, use the checksum-verified upgrade_v3_2.py bridge described in docs/releases/v3.2.2.md.' >&2
     exit 1
 fi
 

@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MasCloner API",
     description="REST API for MasCloner Google Drive to Nextcloud sync service",
-    version="3.2.1",
+    version="3.2.2",
     lifespan=lifespan,
 )
 
