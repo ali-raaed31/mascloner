@@ -321,5 +321,11 @@ def run_update_transaction(
         if isinstance(exc, KeyboardInterrupt):
             raise
         recovery = transaction.get("recovery", {})
-        suffix = "; recovery succeeded" if recovery.get("state") == "completed" else "; recovery failed"
+        recovery_state = recovery.get("state")
+        if recovery_state == "completed":
+            suffix = "; recovery succeeded"
+        elif recovery_state == "not_required":
+            suffix = "; no recovery needed (installation unchanged)"
+        else:
+            suffix = "; recovery failed"
         raise UpdateTransactionError(f"update failed during {transaction['failed_phase']}: {exc}{suffix}") from exc
