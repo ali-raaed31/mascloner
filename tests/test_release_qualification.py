@@ -30,20 +30,20 @@ from tests.harness.state import ProcessStateReset
 
 
 def test_authoritative_version_surfaces():
-    """All version surfaces consistently report 3.2.3."""
+    """All version surfaces consistently report 3.2.4."""
     # App package version
-    assert app_version == "3.2.3"
+    assert app_version == "3.2.4"
 
     # CLI package version
-    assert cli_version == "3.2.3"
+    assert cli_version == "3.2.4"
 
     # FastAPI OpenAPI version
-    assert app.version == "3.2.3"
+    assert app.version == "3.2.4"
 
     # Root VERSION file
     version_file = Path(__file__).resolve().parent.parent / "VERSION"
     assert version_file.exists()
-    assert version_file.read_text().strip() == "3.2.3"
+    assert version_file.read_text().strip() == "3.2.4"
 
 
 def test_clean_install_matrix(isolated_fresh_install: InstallationRoot, fresh_client: TestClient):

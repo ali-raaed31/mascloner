@@ -12,13 +12,6 @@ if [[ ! -f "$install_dir/ops/cli/main.py" || ! -f "$venv_python" ]]; then
     exit 1
 fi
 
-if [[ -z "${MASCLONER_RELEASE_ARCHIVE:-}" && -z "${MASCLONER_RELEASE_DIR:-}" ]]; then
-    printf '%s\n' \
-        'No immutable release source configured.' \
-        'Set MASCLONER_RELEASE_ARCHIVE and MASCLONER_RELEASE_SHA256, or MASCLONER_RELEASE_DIR for an offline verified payload.' >&2
-    exit 1
-fi
-
 cd "$install_dir"
 export PYTHONPATH="$install_dir${PYTHONPATH:+:$PYTHONPATH}"
 exec "$venv_python" -m ops.cli.main update "$@"
