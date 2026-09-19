@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tarfile
 import uuid
@@ -69,8 +70,7 @@ def validate_release(source_dir: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("version"), str)
         or not manifest["version"].strip()
         or not isinstance(manifest.get("revision"), str)
-        or not manifest["revision"].strip()
-        or any(character.isspace() for character in manifest["revision"])
+        or re.fullmatch(r"[0-9a-f]{40}", manifest["revision"]) is None
     ):
         raise UpdateTransactionError("release manifest needs format 1, version, and immutable revision")
     inventory = manifest.get("inventory")
@@ -163,8 +163,11 @@ def check_python_version(python: Path) -> tuple[int, int]:
 
 
 def install_release(source_dir: Path, install_dir: Path) -> None:
-    """Replace release-owned paths together while retaining operator data and venv."""
-    release_paths = tuple(path for path in MANAGED_RUNTIME_PATHS if path not in {".venv", "data", "etc", ".env"})
+    """Replace release-owned code while retaining data, venv, and unqualified identity."""
+    release_paths = tuple(
+        path for path in MANAGED_RUNTIME_PATHS
+        if path not in {".venv", "data", "etc", ".env", "VERSION", ".commit_hash"}
+    )
     for relative in release_paths:
         target = install_dir / relative
         if target.is_dir() and not target.is_symlink():
@@ -177,6 +180,41 @@ def install_release(source_dir: Path, install_dir: Path) -> None:
             shutil.copytree(source, install_dir / relative, symlinks=False)
         elif source.is_file():
             shutil.copy2(source, install_dir / relative)
+
+
+def publish_release_identity(source_dir: Path, install_dir: Path) -> None:
+    """Publish version and revision only after every qualification gate passes."""
+    identity = ("VERSION", ".commit_hash")
+    prior = {
+        name: (install_dir / name).read_bytes() if (install_dir / name).is_file() else None
+        for name in identity
+    }
+    ownership = install_dir.stat()
+    staged: dict[str, Path] = {}
+    try:
+        for name in identity:
+            temporary = install_dir / f".{name.lstrip('.')}.tmp.{uuid.uuid4().hex}"
+            staged[name] = temporary
+            shutil.copy2(source_dir / name, temporary)
+            os.chown(temporary, ownership.st_uid, ownership.st_gid)
+        for name in identity:
+            staged[name].replace(install_dir / name)
+    except BaseException:
+        # This repair is independent of full bundle recovery.  A rollback
+        # failure after a partially published identity must not advertise it.
+        for name, content in prior.items():
+            target = install_dir / name
+            if content is None:
+                target.unlink(missing_ok=True)
+            else:
+                temporary = install_dir / f".{name.lstrip('.')}.restore.{uuid.uuid4().hex}"
+                temporary.write_bytes(content)
+                os.chown(temporary, ownership.st_uid, ownership.st_gid)
+                temporary.replace(target)
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
 
 
 def run_update_transaction(
@@ -254,6 +292,9 @@ def run_update_transaction(
             raise UpdateTransactionError("service start failed")
         if not health_check():
             raise UpdateTransactionError("API/UI health checks failed")
+        transaction["phase"] = "health_checked"
+        _write_json(transaction_path, transaction)
+        publish_release_identity(source_dir, install_dir)
         transaction.update({"state": "completed", "phase": "qualified", "completed_at": datetime.now(timezone.utc).isoformat()})
         _write_json(transaction_path, transaction)
         return transaction

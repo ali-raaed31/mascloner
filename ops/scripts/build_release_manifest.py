@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 
@@ -22,6 +23,8 @@ def main() -> int:
     parser.add_argument("release_dir", type=Path)
     parser.add_argument("--revision", required=True, help="immutable Git commit for this artifact")
     args = parser.parse_args()
+    if re.fullmatch(r"[0-9a-f]{40}", args.revision) is None:
+        parser.error("--revision must be a full lowercase 40-character Git commit hash")
     root = args.release_dir.resolve()
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
     (root / ".commit_hash").write_text(args.revision + "\n", encoding="utf-8")

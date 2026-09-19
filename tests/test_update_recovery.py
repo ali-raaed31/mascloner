@@ -28,7 +28,7 @@ def _write(path: Path, content: str = "x") -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _installation(root: Path, revision: str = "old-revision") -> Path:
+def _installation(root: Path, revision: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") -> Path:
     for directory in ("app", "ops/systemd", "alembic", "etc", ".venv/bin"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     _write(root / "app/main.py")
@@ -38,7 +38,7 @@ def _installation(root: Path, revision: str = "old-revision") -> Path:
     _write(root / "alembic/env.py")
     _write(root / "alembic.ini")
     _write(root / "requirements.txt", "streamlit==1.63.0\n")
-    _write(root / "VERSION", "3.2.0\n")
+    _write(root / "VERSION", "3.0.0\n")
     _write(root / ".commit_hash", revision + "\n")
     _write(root / ".env", "MASCLONER_DB_PATH=data/mascloner.db\n")
     _write(root / "etc/rclone.conf", "[gdrive]\ntype = drive\n")
@@ -62,12 +62,13 @@ def _installation(root: Path, revision: str = "old-revision") -> Path:
     return root
 
 
-def _release(root: Path, revision: str = "new-revision") -> Path:
+def _release(root: Path, revision: str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") -> Path:
     """Create an immutable source artifact, separate from its installed runtime."""
     release = _installation(root, revision=revision)
     for relative in (".venv", "data", "etc"):
         shutil.rmtree(release / relative)
     (release / ".env").unlink()
+    _write(release / "VERSION", "3.2.0\n")
     return release
 
 
@@ -92,7 +93,7 @@ def test_recovery_bundle_snapshots_wal_database_and_restores_exact_runtime(tmp_p
     backup = create_recovery_bundle(install, tmp_path / "backups", service_dir=install / "ops/systemd")
     wal_connection.close()
     manifest, _ = validate_recovery_bundle(backup)
-    assert manifest["source"] == {"version": "3.2.0", "revision": "old-revision"}
+    assert manifest["source"] == {"version": "3.0.0", "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 
     _write(install / "app/failed-release.py", "bad")
     _write(install / "app/main.py", "changed")
@@ -187,9 +188,9 @@ def test_shell_update_entrypoint_only_dispatches_to_verified_cli(tmp_path: Path)
 
 def test_update_failure_restores_the_pre_update_bundle(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "app/main.py", "new")
-    _release_manifest(release, "new-revision")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     health = lambda: True
     with pytest.raises(UpdateTransactionError, match="recovery succeeded"):
         run_update_transaction(
@@ -215,8 +216,8 @@ def test_python_3_9_preflight_changes_nothing(tmp_path: Path) -> None:
     fake_python.unlink()
     _write(fake_python, "#!/bin/sh\necho 3.9\n")
     fake_python.chmod(0o700)
-    release = _release(tmp_path / "release", revision="new-revision")
-    _release_manifest(release, "new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     with pytest.raises(UpdateTransactionError, match="Python 3.9 is incompatible"):
         run_update_transaction(
             release,
@@ -235,8 +236,8 @@ def test_python_3_9_preflight_changes_nothing(tmp_path: Path) -> None:
 
 def test_failed_pre_mutation_backup_does_not_block_a_safe_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
-    _release_manifest(release, "new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     monkeypatch.setattr(
         transaction_module,
         "create_recovery_bundle",
@@ -257,12 +258,12 @@ def test_failed_pre_mutation_backup_does_not_block_a_safe_retry(tmp_path: Path, 
     assert result["state"] == "completed"
 
 
-def test_subsequent_verified_update_copies_version_and_requirements_before_dependencies(tmp_path: Path) -> None:
+def test_subsequent_verified_update_publishes_version_after_qualification(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "VERSION", "3.2.0\n")
     _write(release / "requirements.txt", "streamlit==1.63.0\n")
-    _release_manifest(release, "new-revision")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     observed: list[tuple[str, str]] = []
 
     def dependencies(root: Path) -> bool:
@@ -281,9 +282,10 @@ def test_subsequent_verified_update_copies_version_and_requirements_before_depen
         health_check=lambda: True,
         rollback_services_dir=tmp_path / "units",
     )
-    assert observed == [("3.2.0\n", "streamlit==1.63.0\n")]
+    assert observed == [("3.0.0\n", "streamlit==1.63.0\n")]
     assert result["state"] == "completed"
-    assert (install / ".commit_hash").read_text(encoding="utf-8") == "new-revision\n"
+    assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.0\n"
+    assert (install / ".commit_hash").read_text(encoding="utf-8") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
 
 
 @pytest.mark.parametrize(
@@ -292,9 +294,9 @@ def test_subsequent_verified_update_copies_version_and_requirements_before_depen
 )
 def test_every_hard_gate_recovers_the_pre_update_installation(tmp_path: Path, failed_gate: str) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "app/main.py", "new")
-    _release_manifest(release, "new-revision")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
     failed_once = False
 
@@ -326,8 +328,8 @@ def test_every_hard_gate_recovers_the_pre_update_installation(tmp_path: Path, fa
 
 def test_keyboard_interrupt_recovers_and_records_the_interrupted_phase(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
-    _release_manifest(release, "new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     with pytest.raises(KeyboardInterrupt):
         run_update_transaction(
             release,
@@ -348,9 +350,9 @@ def test_keyboard_interrupt_recovers_and_records_the_interrupted_phase(tmp_path:
 
 def test_normal_cli_update_uses_the_verified_release_transaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install = _installation(tmp_path / "install")
-    release = _release(tmp_path / "release", revision="new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "requirements.txt", "streamlit==1.63.0\n")
-    _release_manifest(release, "new-revision")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     observed: list[tuple[str, str]] = []
     current_user = pwd.getpwuid(os.getuid()).pw_name
     monkeypatch.setenv("INSTALL_DIR", str(install))
@@ -359,13 +361,13 @@ def test_normal_cli_update_uses_the_verified_release_transaction(tmp_path: Path,
     monkeypatch.setenv("MASCLONER_SYSTEMD_DIR", str(tmp_path / "units"))
     monkeypatch.setattr(update_command, "require_root", lambda: None)
     monkeypatch.setattr(update_command, "get_mascloner_user", lambda: current_user)
-    monkeypatch.setattr(
-        update_command,
-        "update_dependencies",
-        lambda root, _user, _layout=None: observed.append(
+    def record_dependencies(root: Path, _user: str, _layout: object = None) -> bool:
+        observed.append(
             ((root / "VERSION").read_text(encoding="utf-8"), (root / "requirements.txt").read_text(encoding="utf-8"))
-        ) or True,
-    )
+        )
+        return True
+
+    monkeypatch.setattr(update_command, "update_dependencies", record_dependencies)
     monkeypatch.setattr(update_command, "run_migrations", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(update_command, "update_systemd_services", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(update_command, "stop_all_services", lambda *_args: [("mascloner-api", "inactive", "stopped"), ("mascloner-ui", "inactive", "stopped"), ("mascloner-tunnel", "not_installed", "already stopped")])
@@ -373,7 +375,7 @@ def test_normal_cli_update_uses_the_verified_release_transaction(tmp_path: Path,
     monkeypatch.setattr(update_command, "run_health_checks", lambda *_args: [("API", True, "ok"), ("UI", True, "ok")])
     result = CliRunner().invoke(cli_app, ["update", "--yes"])
     assert result.exit_code == 0, result.output
-    assert observed == [("3.2.0\n", "streamlit==1.63.0\n")]
+    assert observed == [("3.0.0\n", "streamlit==1.63.0\n")]
 
 
 def test_standalone_bridge_upgrades_7f_shaped_fixture_from_checked_archive(tmp_path: Path) -> None:
@@ -385,7 +387,7 @@ def test_standalone_bridge_upgrades_7f_shaped_fixture_from_checked_archive(tmp_p
     """
     install = _installation(tmp_path / "install", revision="7f22b48bd2c159d998120a39fd672e818910973a")
     (install / "VERSION").unlink()
-    release = _release(tmp_path / "release", revision="new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "app/main.py", "new")
     project_root = Path(__file__).resolve().parents[1]
     for relative in ("ops/cli/recovery.py", "ops/cli/transaction.py", "ops/cli/__init__.py"):
@@ -393,7 +395,7 @@ def test_standalone_bridge_upgrades_7f_shaped_fixture_from_checked_archive(tmp_p
         target = release / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
-    _release_manifest(release, "new-revision")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     archive = tmp_path / "mascloner-3.2.0.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(release, arcname="mascloner-release")
@@ -412,9 +414,9 @@ raise SystemExit(bridge.main())
 '''
     result = subprocess.run([sys.executable, "-c", invocation], capture_output=True, text=True, cwd=project_root)
     assert result.returncode == 0, result.stderr
-    assert "Installed 3.2.0 (new-revision)" in result.stdout
+    assert "Installed 3.2.0 (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)" in result.stdout
     assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.0\n"
-    assert (install / ".commit_hash").read_text(encoding="utf-8") == "new-revision\n"
+    assert (install / ".commit_hash").read_text(encoding="utf-8") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
 
 
 def test_bridge_checksum_failure_leaves_v3_0_fixture_unchanged(tmp_path: Path) -> None:
@@ -440,8 +442,52 @@ bridge.main()
 
 
 def test_release_manifest_rejects_an_added_uninventoried_file(tmp_path: Path) -> None:
-    release = _release(tmp_path / "release", revision="new-revision")
-    _release_manifest(release, "new-revision")
+    release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "app/injected.py", "unexpected")
     with pytest.raises(UpdateTransactionError, match="complete payload inventory"):
         validate_release(release)
+
+
+@pytest.mark.parametrize("revision", ["main", "HEAD", "7f22b48", "A" * 40])
+def test_release_manifest_rejects_mutable_or_noncanonical_revision(tmp_path: Path, revision: str) -> None:
+    release = _release(tmp_path / "release", revision=revision)
+    _release_manifest(release, revision)
+    with pytest.raises(UpdateTransactionError, match="immutable revision"):
+        validate_release(release)
+
+
+def test_failed_recovery_does_not_publish_unqualified_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install = _installation(tmp_path / "install")
+    release = _release(tmp_path / "release")
+    _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    monkeypatch.setattr(
+        transaction_module,
+        "restore_recovery_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RecoveryBundleError("recovery unavailable")),
+    )
+    with pytest.raises(UpdateTransactionError, match="recovery failed"):
+        run_update_transaction(
+            release, install, tmp_path / "backups", install_dependencies=lambda _: False,
+            run_migrations=lambda _: True, install_services=lambda _: True, stop_services=lambda: True,
+            start_services=lambda: True, health_check=lambda: True,
+        )
+    assert (install / "VERSION").read_text(encoding="utf-8") == "3.0.0\n"
+    assert (install / ".commit_hash").read_text(encoding="utf-8") == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+
+
+def test_partial_identity_publication_restores_both_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install = _installation(tmp_path / "install")
+    release = _release(tmp_path / "release")
+    original_replace = Path.replace
+
+    def fail_revision_publish(source: Path, target: Path) -> Path:
+        if source.name.startswith(".commit_hash.tmp.") and target.name == ".commit_hash":
+            raise OSError("revision publication failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_revision_publish)
+    with pytest.raises(OSError, match="revision publication failed"):
+        transaction_module.publish_release_identity(release, install)
+    assert (install / "VERSION").read_text(encoding="utf-8") == "3.0.0\n"
+    assert (install / ".commit_hash").read_text(encoding="utf-8") == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
