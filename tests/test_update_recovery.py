@@ -295,7 +295,8 @@ def test_subsequent_verified_update_publishes_version_after_qualification(tmp_pa
     install = _installation(tmp_path / "install")
     release = _release(tmp_path / "release", revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     _write(release / "VERSION", "3.2.3\n")
-    _write(release / "requirements.txt", "streamlit==1.63.0\n")
+    requirements = "streamlit==1.63.0\n# Smoke-test marker for requirements.txt updater copy\n"
+    _write(release / "requirements.txt", requirements)
     _release_manifest(release, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     observed: list[tuple[str, str]] = []
 
@@ -315,9 +316,10 @@ def test_subsequent_verified_update_publishes_version_after_qualification(tmp_pa
         health_check=lambda: True,
         rollback_services_dir=tmp_path / "units",
     )
-    assert observed == [("3.0.0\n", "streamlit==1.63.0\n")]
+    assert observed == [("3.0.0\n", requirements)]
     assert result["state"] == "completed"
     assert (install / "VERSION").read_text(encoding="utf-8") == "3.2.3\n"
+    assert (install / "requirements.txt").read_text(encoding="utf-8") == requirements
     assert (install / ".commit_hash").read_text(encoding="utf-8") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
 
 
