@@ -108,11 +108,19 @@ def main(
             show_warning(str(exc))
             raise typer.Exit(1)
     report = service.run_migration(mode=mode)
-    if mode == MigrationMode.APPLY and report.success:
+    # A failed apply may already have restored its verified bundle.  Bring
+    # back only services that were running before the attempted cutover.
+    # Before a bundle exists, apply has not mutated the installation yet.
+    safe_to_restart = (
+        report.success
+        or report.resumable_boundary == "restored recovery bundle"
+        or report.recovery_bundle is None
+    )
+    if mode == MigrationMode.APPLY and safe_to_restart:
         try:
             _restart_services(stopped_services)
         except RuntimeError as exc:
-            show_warning(f"Cutover completed but service restart failed: {exc}")
+            show_warning(f"Unable to restart previously active services: {exc}")
             raise typer.Exit(1)
 
     # 1. Preflight table

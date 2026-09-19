@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
+from typer.testing import CliRunner
 
 from app.api.db import classify_legacy_baseline, upgrade_database_to_head
 from app.api.models import Base
 from app.api.sync_lifecycle import migrate_legacy_statuses
-from app.migration import MigrationMode, MigrationService
+from app.migration import MigrationMode, MigrationReport, MigrationService, RecoveryBundleInfo
+from ops.cli.main import app as cli_app
 from tests.harness.installation import InstallationRoot
 
 
@@ -198,3 +201,55 @@ def test_complete_unstamped_current_orm_schema_can_be_safely_stamped(tmp_path: P
 
     assert classify_legacy_baseline(database) == "head"
     assert upgrade_database_to_head(database)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "has_bundle", "should_restart"),
+    [
+        ("restored recovery bundle", True, True),
+        ("services must remain stopped; restore recovery bundle manually", True, False),
+        (None, False, True),
+    ],
+)
+def test_failed_cutover_restarts_only_after_verified_recovery_or_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str | None,
+    has_bundle: bool,
+    should_restart: bool,
+) -> None:
+    import app.migration as migration_package
+
+    migrate_command = importlib.import_module("ops.cli.commands.migrate")
+    bundle = RecoveryBundleInfo(
+        bundle_dir="/tmp/test-recovery",
+        database_backup_path="/tmp/test-recovery/mascloner.db",
+        env_backup_path="/tmp/test-recovery/.env",
+        metadata_path="/tmp/test-recovery/manifest.json",
+        verified=True,
+    ) if has_bundle else None
+    report = MigrationReport(
+        mode=MigrationMode.APPLY,
+        success=False,
+        recovery_bundle=bundle,
+        resumable_boundary=boundary,
+        error="injected cutover failure",
+    )
+
+    class FailedCutover:
+        def _is_cutover_complete(self) -> bool:
+            return False
+
+        def run_migration(self, mode: MigrationMode) -> MigrationReport:
+            assert mode == MigrationMode.APPLY
+            return report
+
+    restarts: list[list[str]] = []
+    monkeypatch.setattr(migration_package, "MigrationService", FailedCutover)
+    monkeypatch.setattr(migrate_command, "_stop_services_for_mutation", lambda: ["mascloner-api"])
+    monkeypatch.setattr(migrate_command, "_restart_services", lambda services: restarts.append(services))
+
+    result = CliRunner().invoke(cli_app, ["migrate", "--apply"])
+
+    assert result.exit_code == 1
+    assert "Migration operation failed: injected cutover failure" in result.stdout
+    assert restarts == ([["mascloner-api"]] if should_restart else [])
