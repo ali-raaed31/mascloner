@@ -9,13 +9,8 @@ INSTALL_DIR="${INSTALL_DIR:-/srv/mascloner}"
 VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
 
 if [[ "${1:-}" == "update" && $EUID -ne 0 ]]; then
-    update_env=("INSTALL_DIR=$INSTALL_DIR")
-    for name in MASCLONER_RELEASE_DIR MASCLONER_RELEASE_ARCHIVE MASCLONER_RELEASE_SHA256 BACKUP_DIR MASCLONER_USER MASCLONER_SYSTEMD_DIR; do
-        if [[ -v $name ]]; then
-            update_env+=("$name=${!name}")
-        fi
-    done
-    exec sudo env "${update_env[@]}" "$0" "$@"
+    exec sudo -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin \
+        INSTALL_DIR=/srv/mascloner /usr/local/bin/mascloner "$@"
 fi
 
 # Colors for fallback messages
