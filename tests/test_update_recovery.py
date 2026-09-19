@@ -82,6 +82,7 @@ def _release_manifest(root: Path, revision: str) -> None:
 
 def test_recovery_bundle_snapshots_wal_database_and_restores_exact_runtime(tmp_path: Path) -> None:
     install = _installation(tmp_path / "install")
+    _write(install / "data/keep.txt", "prior-data")
     wal_connection = sqlite3.connect(install / "data/mascloner.db")
     wal_connection.execute("PRAGMA journal_mode=WAL")
     wal_connection.execute("INSERT INTO runs VALUES (3, 'completed')")
@@ -95,6 +96,8 @@ def test_recovery_bundle_snapshots_wal_database_and_restores_exact_runtime(tmp_p
 
     _write(install / "app/failed-release.py", "bad")
     _write(install / "app/main.py", "changed")
+    _write(install / "data/keep.txt", "changed")
+    _write(install / "data/new.txt", "new")
     _write(install / "logs/operator-note.log", "preserve this operational log")
     restore_recovery_bundle(
         backup,
@@ -106,6 +109,8 @@ def test_recovery_bundle_snapshots_wal_database_and_restores_exact_runtime(tmp_p
     )
     assert not (install / "app/failed-release.py").exists()
     assert (install / "app/main.py").read_text(encoding="utf-8") == "x"
+    assert (install / "data/keep.txt").read_text(encoding="utf-8") == "prior-data"
+    assert not (install / "data/new.txt").exists()
     assert (install / "logs/operator-note.log").read_text(encoding="utf-8") == "preserve this operational log"
     assert sqlite3.connect(install / "data/mascloner.db").execute("SELECT count(*) FROM runs").fetchone() == (3,)
 

@@ -192,6 +192,10 @@ def create_recovery_bundle(
             if source.exists():
                 _copy_path(source, payload / relative)
         _online_sqlite_backup(install_dir / "data" / "mascloner.db", payload / "data" / "mascloner.db")
+        for item in (install_dir / "data").iterdir():
+            if item.name in {"mascloner.db", "mascloner.db-wal", "mascloner.db-shm"}:
+                continue
+            _copy_path(item, payload / "data" / item.name)
 
         release_service_source = install_dir / "ops" / "systemd"
         if not release_service_source.is_dir():
