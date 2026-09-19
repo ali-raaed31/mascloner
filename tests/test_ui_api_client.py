@@ -3,7 +3,15 @@
 from unittest.mock import MagicMock, patch
 import pytest
 
-from app.ui.api_client import APIClient
+from pydantic import ValidationError
+
+from app.ui.api_client import (
+    APIClient,
+    RclonePerformanceContract,
+    RunContract,
+    ScheduleUpdateContract,
+    SyncRouteVerificationContract,
+)
 
 
 def test_api_client_gdrive_methods():
@@ -128,3 +136,88 @@ def test_api_client_maintenance_and_oauth_methods():
             "/oauth/google-drive/oauth-config/test",
             json={"client_id": "test-client-id", "client_secret": "test-secret"},
         )
+
+
+def test_ui_contracts_reject_missing_and_unknown_fields():
+    """The UI boundary must fail before a retired request reaches FastAPI."""
+    with pytest.raises(ValidationError):
+        ScheduleUpdateContract(enabled=True, interval_min=120)
+
+    with pytest.raises(ValidationError):
+        RclonePerformanceContract(
+            transfers=4,
+            checkers=8,
+            tpslimit=10,
+            tpslimit_burst=1,
+            fast_list=False,
+            use_fast_list=False,
+        )
+
+
+def test_typed_schedule_and_performance_operations_use_canonical_payloads():
+    client = APIClient(base_url="http://127.0.0.1:8787")
+    schedule = ScheduleUpdateContract(enabled=True, interval_min=120, jitter_sec=20)
+    performance = RclonePerformanceContract(
+        transfers=4,
+        checkers=8,
+        tpslimit=10,
+        tpslimit_burst=1,
+        buffer_size="32Mi",
+        drive_chunk_size="64M",
+        drive_upload_cutoff="128M",
+        fast_list=False,
+    )
+
+    with patch.object(client, "_make_request") as mock_req:
+        mock_req.return_value = {"success": True, "message": "saved"}
+        assert client.save_schedule(schedule).success is True
+        mock_req.assert_called_with(
+            "POST", "/schedule", json={"enabled": True, "interval_min": 120, "jitter_sec": 20}
+        )
+
+        assert client.save_rclone_performance(performance).success is True
+        mock_req.assert_called_with(
+            "POST",
+            "/rclone/config",
+            json=performance.model_dump(),
+        )
+
+
+def test_typed_operations_preserve_validation_messages():
+    client = APIClient(base_url="http://127.0.0.1:8787")
+    schedule = ScheduleUpdateContract(enabled=True, interval_min=120, jitter_sec=20)
+    with patch.object(client, "_make_request", return_value={"success": False, "message": "jitter is invalid"}):
+        result = client.save_schedule(schedule)
+    assert result.success is False
+    assert result.message == "jitter is invalid"
+
+
+def test_runs_and_route_verification_use_canonical_response_shapes():
+    client = APIClient(base_url="http://127.0.0.1:8787")
+    run = {
+        "id": 7,
+        "status": "completed",
+        "started_at": "2026-09-19T10:00:00Z",
+        "finished_at": "2026-09-19T10:01:30Z",
+        "num_added": 3,
+        "num_updated": 2,
+        "bytes_transferred": 1024,
+        "errors": 0,
+        "log_path": None,
+        "message": None,
+    }
+    with patch.object(client, "_make_request", return_value=[run]):
+        runs = client.get_recent_runs()
+    assert runs == [RunContract.model_validate(run)]
+    assert runs[0].mutation_count == 5
+    assert runs[0].duration_seconds == 90
+
+    route = {
+        "success": False,
+        "source": {"remote_ok": True, "path_ok": False, "message": "Source path missing"},
+        "destination": {"remote_ok": True, "path_ok": True, "message": "Destination path exists"},
+    }
+    with patch.object(client, "_make_request", return_value=route) as mock_req:
+        result = client.verify_sync_route()
+    assert result == SyncRouteVerificationContract.model_validate(route)
+    mock_req.assert_called_with("POST", "/config/paths/verify")

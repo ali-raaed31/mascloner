@@ -14,6 +14,8 @@ _Avoid_: Job, Task, Process, Batch
 The lifecycle state of a `SyncRun`: `pending` before execution, `running` during execution, `completed` after a successful execution, `failed` after an unsuccessful execution, `aborted` after deliberate interruption, or `skipped` when execution is intentionally not started.
 _Avoid_: Success, Error, Stopped, Partial
 
+Legacy stored values are converted only through `app.api.sync_lifecycle.LEGACY_STATUS_MAP`: `success` becomes `completed`; `error` and `partial` become `failed`; `stopped`, `cancelled`, and `canceled` become `aborted`. An unknown legacy value stops the entire conversion before any row changes.
+
 **ActiveRunSnapshot**:
 A real-time consolidated summary of the currently executing sync run, providing progress metrics, transfer throughput, and recent file events.
 _Avoid_: LiveMonitorData, RunTelemetry, LiveFeed

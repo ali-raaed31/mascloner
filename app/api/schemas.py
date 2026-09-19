@@ -123,6 +123,22 @@ class ApiResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class RouteEndpointVerification(BaseModel):
+    """Non-secret outcome for one fixed endpoint and its selected folder."""
+
+    remote_ok: bool
+    path_ok: bool
+    message: str
+
+
+class SyncRouteVerification(BaseModel):
+    """Verification of both persisted endpoints and selected sync folders."""
+
+    success: bool
+    source: RouteEndpointVerification
+    destination: RouteEndpointVerification
+
+
 class RcloneConfigRequest(BaseModel):
     """Request model for updating rclone performance settings."""
 

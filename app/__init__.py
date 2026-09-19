@@ -1,3 +1,3 @@
 """MasCloner - Automated Google Drive to Nextcloud synchronization."""
 
-__version__ = "3.1.5"
+__version__ = "3.2.0"

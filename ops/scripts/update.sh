@@ -364,26 +364,14 @@ run_migrations() {
         if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/pip" list | grep -q alembic; then
             cd "$INSTALL_DIR"
             
-            # Check if database is already stamped
-            local current_version
-            current_version=$(sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" current 2>/dev/null | head -1)
-            
-            if [[ -z "$current_version" ]] || [[ "$current_version" == *"database is not under Alembic"* ]]; then
-                # Database exists but not stamped - stamp it with initial migration
-                echo_info "Database not under Alembic control, stamping with initial schema..."
-                if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" stamp head 2>/dev/null; then
-                    echo_success "Database stamped successfully"
-                else
-                    echo_warning "Could not stamp database, will try to upgrade anyway"
-                fi
-            fi
-            
-            # Run migrations
-            echo_info "Running Alembic migrations..."
-            if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/alembic" upgrade head; then
+            # Use the same schema classifier as application startup.  Never
+            # stamp an unknown existing database to head.
+            echo_info "Classifying and running Alembic migrations..."
+            if sudo -u "$MASCLONER_USER" "$INSTALL_DIR/.venv/bin/python" -c 'from app.api.db import upgrade_database_to_head; import os, sys; sys.exit(0 if upgrade_database_to_head(os.environ.get("MASCLONER_DB_PATH", "data/mascloner.db")) else 1)'; then
                 echo_success "Database migrations completed"
             else
-                echo_warning "Migration may have failed, but continuing..."
+                echo_error "Database migration failed or schema is unsupported; refusing to continue"
+                exit 1
             fi
             
             cd -

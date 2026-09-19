@@ -7,8 +7,32 @@ from rich.console import Console
 from rich.table import Table
 
 from ops.cli.ui.progress import show_header, show_info, show_success, show_warning
+from ops.cli.utils import check_systemd_service, start_service, stop_service
 
 console = Console()
+
+_SERVICES = ("mascloner-api", "mascloner-ui", "mascloner-tunnel")
+
+
+def _stop_services_for_mutation() -> list[str]:
+    """Stop active MasCloner services and prove they are down before DB restore."""
+    previously_active: list[str] = []
+    for service in _SERVICES:
+        active, state = check_systemd_service(service)
+        if active:
+            if not stop_service(service):
+                raise RuntimeError(f"Unable to stop {service}")
+            previously_active.append(service)
+        active_after, state_after = check_systemd_service(service)
+        if active_after or state_after == "failed":
+            raise RuntimeError(f"{service} did not reach a stopped state")
+    return previously_active
+
+
+def _restart_services(services: list[str]) -> None:
+    for service in services:
+        if not start_service(service):
+            raise RuntimeError(f"Unable to restart {service}")
 
 
 def main(
@@ -44,7 +68,16 @@ def main(
 
     if rollback_bundle:
         show_header("MasCloner Migration", "Restoring from Recovery Bundle (Rollback)")
-        report = service.rollback(Path(rollback_bundle))
+        try:
+            rollback_stopped_services = _stop_services_for_mutation()
+            report = service.rollback(Path(rollback_bundle), services_stopped=True)
+            if report.success:
+                _restart_services(rollback_stopped_services)
+        except RuntimeError as exc:
+            report = None
+            show_warning(str(exc))
+            raise typer.Exit(1)
+        assert report is not None
         if not report.success:
             show_warning(f"Rollback failed: {report.error}")
             raise typer.Exit(1)
@@ -67,7 +100,20 @@ def main(
 
     show_header("MasCloner Migration", title_action)
 
+    stopped_services: list[str] = list()
+    if mode == MigrationMode.APPLY and not service._is_cutover_complete():
+        try:
+            stopped_services = _stop_services_for_mutation()
+        except RuntimeError as exc:
+            show_warning(str(exc))
+            raise typer.Exit(1)
     report = service.run_migration(mode=mode)
+    if mode == MigrationMode.APPLY and report.success:
+        try:
+            _restart_services(stopped_services)
+        except RuntimeError as exc:
+            show_warning(f"Cutover completed but service restart failed: {exc}")
+            raise typer.Exit(1)
 
     # 1. Preflight table
     if report.preflight:
@@ -106,6 +152,9 @@ def main(
         console.print(ms_table)
 
     if mode == MigrationMode.CHECK:
+        if report.success and report.preflight is None:
+            show_info("v3 cutover is already complete; use the ordinary update or backup workflow.")
+            return
         if report.preflight and report.preflight.is_healthy:
             show_success("All preflight checks passed. Ready for migration.")
         elif report.preflight and (

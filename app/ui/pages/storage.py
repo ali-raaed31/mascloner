@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 import streamlit as st
 
 try:
     from app.ui.api_client import APIClient
-    from app.ui.components.theme import (
-        format_bytes,
-        format_iso_time,
-        render_hero_bar,
-    )
+    from app.ui.components.theme import render_hero_bar
 except ImportError:
     from api_client import APIClient
-    from components.theme import (
-        format_bytes,
-        format_iso_time,
-        render_hero_bar,
-    )
+    from components.theme import render_hero_bar
 
 
 def get_api() -> APIClient:
@@ -35,6 +25,7 @@ render_hero_bar(api)
 paths = api.get_sync_paths() or {}
 gdrive_src = paths.get("gdrive_src") or "/"
 nc_dest_path = paths.get("nc_dest_path") or "/"
+current_route_paths = {"gdrive_src": gdrive_src, "nc_dest_path": nc_dest_path}
 
 # 1. Global Endpoint Verification Action
 header_col1, header_col2 = st.columns([3, 1])
@@ -45,20 +36,23 @@ with header_col1:
 with header_col2:
     if st.button("⚡ Verify Both Endpoints", help="Test both Google Drive API and Nextcloud WebDAV connectivity", use_container_width=True):
         with st.spinner("Probing endpoints...", show_time=True):
-            gd_res = api.test_google_drive_connection() or {}
-            nc_res = api.test_nextcloud() or {}
-            st.session_state.route_verification = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "gdrive_ok": gd_res.get("success", False),
-                "gdrive_msg": gd_res.get("message", "Unknown status"),
-                "nc_ok": nc_res.get("success", False),
-                "nc_msg": nc_res.get("message", "Unknown status"),
-            }
-            st.rerun()
+            result = api.verify_sync_route()
+            if result:
+                st.session_state.route_verification = {
+                    "paths": current_route_paths,
+                    "result": result.model_dump(),
+                }
+                st.rerun()
+            else:
+                st.error("Unable to verify the configured sync route.")
 
-verification = st.session_state.get("route_verification")
-if verification:
-    st.caption(f"Last verified: {format_iso_time(verification['timestamp'], include_relative=True)}")
+cached_verification = st.session_state.get("route_verification")
+verification = (
+    cached_verification.get("result")
+    if isinstance(cached_verification, dict)
+    and cached_verification.get("paths") == current_route_paths
+    else None
+)
 
 st.divider()
 
@@ -68,30 +62,32 @@ col_gd, col_nc = st.columns(2)
 # --- Google Drive Card ---
 with col_gd.container(border=True):
     st.markdown("### 📁 Google Drive Source")
-    st.markdown(f"**Target Remote**: `gdrive`")
+    st.markdown("**Target Remote**: `gdrive`")
     st.markdown(f"**Source Root Path**: `{gdrive_src}`")
 
-    gd_status = api.get_google_drive_status() or {}
-    is_gd_connected = gd_status.get("connected", False)
+    gd_endpoint_status = api.get_google_drive_endpoint_status()
+    is_gd_configured = bool(gd_endpoint_status and gd_endpoint_status.configured)
 
     if verification:
-        if verification["gdrive_ok"]:
-            st.success(f"🟢 {verification['gdrive_msg']}")
+        source = verification["source"]
+        if source["path_ok"]:
+            st.success(f"🟢 {source['message']}")
         else:
-            st.error(f"🔴 {verification['gdrive_msg']}")
+            st.error(f"🔴 {source['message']}")
     else:
-        if is_gd_connected:
+        if is_gd_configured:
             st.success("🟢 Connected & Authenticated")
         else:
             st.error("🔴 Disconnected / Missing Token")
 
     if st.button("🔍 Test Google Drive Connection", key="test_gd_btn", use_container_width=True):
         with st.spinner("Testing Google Drive...", show_time=True):
-            res = api.test_google_drive_connection() or {}
-            if res.get("success"):
-                st.success(f"Connection test passed: {res.get('message', 'OK')}")
+            result = api.verify_sync_route()
+            if result and result.source.path_ok:
+                st.success(f"Connection test passed: {result.source.message}")
             else:
-                st.error(f"Connection failed: {res.get('message', 'Failed')}")
+                message = result.source.message if result else "Failed"
+                st.error(f"Connection failed: {message}")
 
     # Re-authentication Form
     with st.expander("🔑 Update OAuth Token / Re-authenticate"):
@@ -141,17 +137,18 @@ with col_gd.container(border=True):
 # --- Nextcloud WebDAV Card ---
 with col_nc.container(border=True):
     st.markdown("### ☁️ Nextcloud Destination")
-    st.markdown(f"**Target Remote**: `ncwebdav`")
+    st.markdown("**Target Remote**: `ncwebdav`")
     st.markdown(f"**Destination Path**: `{nc_dest_path}`")
 
-    nc_status = api.get_nextcloud_status() or {}
-    is_nc_configured = nc_status.get("configured", False)
+    nc_endpoint_status = api.get_nextcloud_endpoint_status()
+    is_nc_configured = bool(nc_endpoint_status and nc_endpoint_status.configured)
 
     if verification:
-        if verification["nc_ok"]:
-            st.success(f"🟢 {verification['nc_msg']}")
+        destination = verification["destination"]
+        if destination["path_ok"]:
+            st.success(f"🟢 {destination['message']}")
         else:
-            st.error(f"🔴 {verification['nc_msg']}")
+            st.error(f"🔴 {destination['message']}")
     else:
         if is_nc_configured:
             st.success("🟢 WebDAV Configured & Ready")
@@ -160,17 +157,18 @@ with col_nc.container(border=True):
 
     if st.button("🔍 Test Nextcloud Connection", key="test_nc_btn", use_container_width=True):
         with st.spinner("Testing Nextcloud WebDAV...", show_time=True):
-            res = api.test_nextcloud() or {}
-            if res.get("success"):
-                st.success(f"WebDAV test passed: {res.get('message', 'OK')}")
+            result = api.verify_sync_route()
+            if result and result.destination.path_ok:
+                st.success(f"WebDAV test passed: {result.destination.message}")
             else:
-                st.error(f"WebDAV test failed: {res.get('message', 'Failed')}")
+                message = result.destination.message if result else "Failed"
+                st.error(f"WebDAV test failed: {message}")
 
     # WebDAV Configuration Form
     with st.expander("⚙️ Configure Nextcloud WebDAV Credentials"):
         with st.form("nc_cred_form"):
-            webdav_url = st.text_input("Nextcloud WebDAV URL", value=nc_status.get("url") or "https://nextcloud.example.com/remote.php/dav/files/user/")
-            webdav_user = st.text_input("Username", value=nc_status.get("user") or "")
+            webdav_url = st.text_input("Nextcloud WebDAV URL", value=(nc_endpoint_status.url if nc_endpoint_status else None) or "https://nextcloud.example.com/remote.php/dav/files/user/")
+            webdav_user = st.text_input("Username", value=(nc_endpoint_status.user if nc_endpoint_status else None) or "")
             webdav_pass = st.text_input("App Password", type="password")
             submit_nc = st.form_submit_button("Save & Test WebDAV Credentials")
 
@@ -208,6 +206,7 @@ with st.expander("🛠️ Advanced: Modify Sync Paths & Folder Browser", expande
                 "nc_dest_path": new_nc_dest.strip() or "/",
             })
             if upd_res and upd_res.get("success"):
+                st.session_state.pop("route_verification", None)
                 st.success("Sync paths successfully updated in SQLite database!")
                 st.rerun()
             else:
