@@ -44,9 +44,15 @@ mascloner update
 
 The v3.2.4 and later updater fetches the latest published release and its
 digest automatically.
-For an offline update, set `MASCLONER_RELEASE_ARCHIVE` and
-`MASCLONER_RELEASE_SHA256`, or set `MASCLONER_RELEASE_DIR` to a prepared
-release directory. An installation still at `7f22b48` needs the one-time
+For an offline update, pass the archive and digest to the root process:
+
+```bash
+sudo env MASCLONER_RELEASE_ARCHIVE=/path/to/release.tar.gz \
+  MASCLONER_RELEASE_SHA256=PUBLISHED_SHA256 mascloner update
+```
+
+`MASCLONER_RELEASE_DIR` is also available for a prepared local release
+directory. An installation still at `7f22b48` needs the one-time
 bridge in [the v3.2.2 upgrade guide](../../docs/releases/v3.2.2.md) first.
 
 ### Check Status

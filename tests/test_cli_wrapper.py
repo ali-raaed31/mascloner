@@ -15,7 +15,12 @@ def test_plain_update_command_elevates_once(tmp_path: Path) -> None:
     sudo.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
     sudo.chmod(0o755)
     wrapper = Path(__file__).resolve().parents[1] / "ops/scripts/mascloner"
-    environment = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}", INSTALL_DIR=str(tmp_path / "untrusted"))
+    environment = dict(
+        os.environ,
+        PATH=f"{tmp_path}:{os.environ['PATH']}",
+        INSTALL_DIR=str(tmp_path / "untrusted"),
+        MASCLONER_RELEASE_ARCHIVE=str(tmp_path / "untrusted.tar.gz"),
+    )
 
     result = subprocess.run(["bash", str(wrapper), "update"], env=environment, capture_output=True, text=True)
 

@@ -252,9 +252,10 @@ the latest published release and its digest automatically.
 mascloner update
 ```
 
-For an offline update, set `MASCLONER_RELEASE_ARCHIVE` and
-`MASCLONER_RELEASE_SHA256`, or set `MASCLONER_RELEASE_DIR` to a prepared
-release directory.
+For an offline update, pass the archive and published digest to the root
+process with `sudo env MASCLONER_RELEASE_ARCHIVE=... MASCLONER_RELEASE_SHA256=... mascloner update`.
+`MASCLONER_RELEASE_DIR` is also available for a prepared local release
+directory.
 
 ### Accepted Architecture Migration
 
